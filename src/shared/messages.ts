@@ -27,6 +27,7 @@ import type {
   PageContext,
   SelectionInfo,
   SidePanelView,
+  TabContext,
   TabGroupRef,
   TabRef,
 } from './types';
@@ -50,6 +51,16 @@ export interface MessageContracts {
   'tabs:list': {
     request: { currentWindowOnly?: boolean };
     response: { tabs: TabRef[]; groups: TabGroupRef[] };
+  };
+
+  /**
+   * Readable text and ~500-token chunks for the given tabs, one result per
+   * id in the same order. Unreadable tabs come back with a status, not an
+   * error. See shared/tabContext.ts.
+   */
+  'tabs:getContext': {
+    request: { tabIds: number[] };
+    response: { contexts: TabContext[] };
   };
 
   /** The tab the user is looking at right now. */
