@@ -28,6 +28,12 @@ export interface TabRef {
   index: number;
   /** False for chrome://, the Web Store and other pages we cannot script. */
   accessible: boolean;
+  /**
+   * False when Chrome has unloaded (discarded) the tab to save memory, or it
+   * has not loaded since the browser restarted. Only the title and URL are
+   * known until the user visits it.
+   */
+  loaded: boolean;
 }
 
 /** A Chrome tab group plus the ids of the tabs in it. */
@@ -68,6 +74,75 @@ export interface SelectionInfo {
   suffix: string;
   url: string;
   title: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Page text extraction (getTabContext)
+ * ------------------------------------------------------------------ */
+
+/** One heading or paragraph-like block of readable page text, in order. */
+export interface TextBlock {
+  kind: 'heading' | 'text';
+  text: string;
+  /** 1-6 for headings. */
+  level?: number;
+}
+
+/** What the injected extractor returns for one page. */
+export interface ExtractedPage {
+  title: string;
+  url: string;
+  /** Readable text, blocks joined by blank lines. */
+  text: string;
+  wordCount: number;
+  blocks: TextBlock[];
+  /**
+   * `stack-exchange` on Stack Overflow and other Stack Exchange sites,
+   * `readability` normally, `visible-text` when Readability found no article.
+   */
+  extractor: 'stack-exchange' | 'readability' | 'visible-text';
+  /** True when the text hit the size cap and was cut short. */
+  truncated: boolean;
+}
+
+/** About 500 tokens of page text, the unit we send to the AI and cite. */
+export interface TextChunk {
+  /** Unique across tabs: `t<tabId>-c<index>`. */
+  id: string;
+  index: number;
+  /** Nearest heading above the chunk's first block, or '' if none. */
+  heading: string;
+  text: string;
+  /** Rough token count (characters / 4). */
+  tokenEstimate: number;
+}
+
+/**
+ * Why a tab did or did not yield text.
+ *   ok          text extracted
+ *   not_loaded  tab is discarded or never loaded; only title and URL
+ *   restricted  chrome://, the Web Store and other pages we cannot script
+ *   pdf         Chrome's PDF viewer; not supported yet
+ *   error       the tab is gone, or injection or extraction failed
+ */
+export type TabContextStatus = 'ok' | 'not_loaded' | 'restricted' | 'pdf' | 'error';
+
+/** Everything getTabContext knows about one tab. */
+export interface TabContext {
+  tabId: number;
+  title: string;
+  url: string;
+  groupId: number;
+  loaded: boolean;
+  status: TabContextStatus;
+  /** Set when status is `error`. */
+  error?: string;
+  /** Empty unless status is `ok`. */
+  text: string;
+  wordCount: number;
+  chunks: TextChunk[];
+  extractor: ExtractedPage['extractor'] | null;
+  truncated: boolean;
 }
 
 /** Generic acknowledgement for messages that have nothing to return. */

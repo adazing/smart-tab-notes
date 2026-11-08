@@ -12,7 +12,8 @@
  */
 
 import { registerHandlers, notify } from '../shared/messages';
-import type { TabGroupRef, TabRef } from '../shared/types';
+import { getTabContext } from '../shared/tabContext';
+import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
 
 const LOG = '[smart-tab-notes:bg]';
 
@@ -36,60 +37,6 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 /* ------------------------------------------------------------------ *
- * Tab helpers
- * ------------------------------------------------------------------ */
-
-/** Pages we are not allowed to inject into, so there is no content script. */
-function isAccessible(url: string | undefined): boolean {
-  if (!url) return false;
-  if (!/^(https?|file):/.test(url)) return false;
-  // Chrome blocks extensions on its own web properties.
-  if (url.startsWith('https://chrome.google.com/webstore')) return false;
-  if (url.startsWith('https://chromewebstore.google.com')) return false;
-  return true;
-}
-
-function toTabRef(tab: chrome.tabs.Tab): TabRef | null {
-  if (tab.id === undefined || tab.windowId === undefined) return null;
-  const ref: TabRef = {
-    tabId: tab.id,
-    windowId: tab.windowId,
-    groupId: tab.groupId ?? -1,
-    title: tab.title ?? '',
-    url: tab.url ?? tab.pendingUrl ?? '',
-    active: tab.active ?? false,
-    index: tab.index ?? 0,
-    accessible: isAccessible(tab.url ?? tab.pendingUrl),
-  };
-  if (tab.favIconUrl) ref.favIconUrl = tab.favIconUrl;
-  return ref;
-}
-
-async function listGroups(tabs: TabRef[]): Promise<TabGroupRef[]> {
-  // tabGroups is unavailable in some channels; never let it break the list.
-  if (typeof chrome.tabGroups === 'undefined') return [];
-  try {
-    const groups = await chrome.tabGroups.query({});
-    return groups.map((group) => ({
-      groupId: group.id,
-      windowId: group.windowId,
-      title: group.title ?? '',
-      color: group.color,
-      collapsed: group.collapsed,
-      tabIds: tabs.filter((tab) => tab.groupId === group.id).map((tab) => tab.tabId),
-    }));
-  } catch (error) {
-    console.warn(LOG, 'tabGroups.query failed:', error);
-    return [];
-  }
-}
-
-async function getActiveTabRef(): Promise<TabRef | null> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  return tab ? toTabRef(tab) : null;
-}
-
-/* ------------------------------------------------------------------ *
  * Message handlers
  * ------------------------------------------------------------------ */
 
@@ -97,13 +44,12 @@ registerHandlers('background', {
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
   'tabs:list': async ({ currentWindowOnly }) => {
-    const query: chrome.tabs.QueryInfo = currentWindowOnly ? { currentWindow: true } : {};
-    const found = await chrome.tabs.query(query);
-    const tabs = found
-      .map(toTabRef)
-      .filter((tab): tab is TabRef => tab !== null);
-    return { tabs, groups: await listGroups(tabs) };
+    const tabs = await listTabs({ currentWindowOnly });
+    return { tabs, groups: await listTabGroups(tabs) };
   },
+
+  /** Readable text and ~500-token chunks for the given tabs, in order. */
+  'tabs:getContext': async ({ tabIds }) => ({ contexts: await getTabContext(tabIds) }),
 
   'tabs:getActive': async () => ({ tab: await getActiveTabRef() }),
 
