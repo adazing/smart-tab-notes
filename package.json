@@ -1,0 +1,34 @@
+{
+  "name": "smart-tab-notes",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Chrome extension that explains what you read using your other open tabs, and keeps the answer pinned to the page.",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node scripts/build.mjs && node scripts/verify-dist.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tests/tsconfig.json",
+    "icons": "node scripts/make-icons.mjs",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "verify": "node scripts/verify-dist.mjs",
+    "test": "vitest run src",
+    "test:toolbar": "vitest run src/content",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/chrome": "0.0.270",
+    "@types/node": "22.9.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.7.0",
+    "jsdom": "^26.1.0",
+    "typescript": "5.6.3",
+    "vite": "6.4.5",
+    "vitest": "^4.1.12"
+  }
+}
