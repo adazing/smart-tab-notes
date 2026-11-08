@@ -79,3 +79,9 @@ export interface Ack {
 
 /** Payload for messages that take no arguments. */
 export type Empty = Record<string, never>;
+
+/** Week 1 actions carry a snapshot, never a later browser selection. */
+export type ToolbarAction =
+  | { action: 'explain' | 'highlight'; text: string; url: string }
+  | { action: 'ask'; text: string; url: string; question: string }
+  | { action: 'note'; text: string; url: string; note: string };

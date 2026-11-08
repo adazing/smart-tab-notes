@@ -140,6 +140,7 @@ Add a row here whenever you add a message. `→` is the direction it travels.
 | `page:getSelection` | side panel/background → content | `{}` | `{ selection: SelectionInfo \| null }` | |
 | `page:selectionChanged` | content → background → side panel | `{ selection: SelectionInfo \| null, tabId?: number }` | `Ack` | Debounced 250ms. The worker stamps `tabId`. |
 | `sidepanel:navigate` | any → side panel | `{ view: SidePanelView }` | `Ack` | Brings a view to the front. |
+| `toolbar:action` | content → background | `{ action, text, url, question? , note? }` | `Ack` | Discriminated union: Ask requires `question`, Note requires `note`. Week 1 acknowledgment only. |
 | `sidepanel:ready` | side panel → background | `{}` | `Ack` | Sent once the panel mounts. |
 
 Shared shapes (`TabRef`, `TabGroupRef`, `PageContext`, `SelectionInfo`, `Ack`)
@@ -212,7 +213,7 @@ that way when you build on it.
 
 Called out so nobody assumes they are handled:
 
-- **No storage layer.** Nothing is persisted yet; `storage` is only declared.
+- **No storage layer on this branch.** Ticket #4 exists on `arielle/local-storage`; toolbar highlights and notes are temporary.
 - **No AI calls**, no API key handling, no cost tracking.
 - **No highlight anchoring.** The content script returns a quote plus ~120
   characters either side, which is the shape of a W3C TextQuoteSelector but not
@@ -224,3 +225,87 @@ Called out so nobody assumes they are handled:
   this is still an open question in the PRD.
 - **Side panel is global, not per tab.** One panel for the whole window. If a
   view needs per-tab state, key it by tab id yourself.
+
+
+## Text selection toolbar (Ticket #2)
+
+`src/content/toolbar.ts` installs a single toolbar through the existing content
+entry point. `selection.ts` captures a cloned Range and text/URL snapshot, then
+calculates fixed viewport coordinates. Mouse drags wait for release; keyboard and
+selection changes settle for 100ms. Empty selections, editable controls, and the
+extension's own UI are ignored. Nothing new reads page text beyond the selection.
+
+The UI and its stylesheet live entirely inside a Shadow Root, using the side
+panel's white, blue, and rounded-corner conventions. Page styles do not reach the
+buttons. The toolbar prefers space above a selection, flips below, and clamps to
+the visual viewport. Scroll/resize work is coalesced with requestAnimationFrame.
+Escape closes a popover first, then the toolbar; outside clicks, cleared or new
+selections, offscreen ranges, and navigation dismiss or replace it. Inputs keep
+the original text/URL snapshot even when the browser selection loses focus.
+Reinitialization and page teardown remove listeners, observers, and timers.
+
+| Action | Week 1 behavior |
+| --- | --- |
+| Explain | Shows loading, then a clearly labeled mock explanation after 500ms; Close dismisses it. |
+| Ask | Focuses a question field; Enter submits a demo acknowledgment. |
+| Highlight | Draws temporary, pointer-transparent range rectangles without changing text, links, or page styles. |
+| Note | Focuses a note field with Save temporarily/Cancel; explicitly reports that no storage write occurred. |
+
+All action submissions use the existing `sendToBackground('toolbar:action', ...)`
+helper. The payload is a `ToolbarAction` union in `src/shared/types.ts`: all
+variants include `text` and `url`; Ask includes `question`, Note includes `note`.
+The background handler returns `{ ok: true }` without logging or persisting
+content. Messaging failures display a reload notice. Week 2 should replace this
+handler with AI routing and connect annotation saves through Ticket #4 in the
+extension context. Do not open IndexedDB from a content script.
+
+No PRD was provided. Persistence, collection membership, real AI responses, and
+stable highlight anchoring remain outside this ticket. Highlights use shadow-scoped
+rectangles instead of CSS Custom Highlight styling, which would require a
+page-level stylesheet. They follow scroll and resize, but arbitrary dynamic text
+replacement may invalidate ranges. Ordinary high-z-index pages are supported;
+full-screen/top-layer overlays, transformed root elements, selections in other
+Shadow Roots, PDFs, and iframes are limitations. The existing manifest injects
+only into top-level HTTP(S) pages; Chrome internal pages and the Web Store do not
+allow this content script. The manifest and existing message infrastructure are
+unchanged.
+
+### Testing
+
+Requires Node 20.19+ for the added test tooling. No lint configuration exists.
+
+```bash
+npm ci
+npm run typecheck
+npm test                 # selection, actions, lifecycle, positioning
+npm run build            # existing production build + manifest/content verification
+npx playwright install chromium
+npm run test:browser     # actual unpacked extension on a controlled HTTP(S) fixture
+TOOLBAR_LIVE_SITES=1 npm run test:browser  # opt-in external website checks
+```
+
+The fixture exercises all four actions, loading/placeholder states, snapshot
+preservation, formatted links, aggressive page CSS, narrow positioning, outside
+clicks, Escape, scroll dismissal, and SPA navigation. Live-site tests exercise
+selection and all four actions on Wikipedia, arXiv, Medium, MDN, and GitHub when
+the publisher allows automated access. Test results are documented below; an
+attempt blocked by a publisher is not a successful website test.
+
+To check manually in Chrome:
+
+1. Run `npm run build`.
+2. In `chrome://extensions`, enable Developer mode and Load unpacked → `dist/`.
+3. Open/reload an HTTP(S) article and select nonempty text using mouse or keyboard.
+4. Test Explain, Ask (Enter), Highlight, and Note; notes should say they are temporary.
+5. Check outside click and Escape, new/cleared selections, viewport edges,
+   multi-line selections, scrolling, and resizing.
+6. Repeat on Wikipedia, an arXiv abstract, a Medium article, MDN, and a GitHub README;
+   check the console for extension errors. Also check that editable fields do not
+   show a toolbar and links/copying still work normally.
+
+Verified in the unpacked extension using Playwright Chromium: the controlled fixture
+and all four actions on Wikipedia (TypeScript), arXiv (1706.03762), MDN (Selection),
+and GitHub (microsoft/TypeScript README). Medium's Software 2.0 article returned
+HTTP 403 / “Just a moment...” in the automated browser, so Medium remains a manual
+check, not a passed site. Human visual review and the full edge-case checklist
+above remain recommended before merging.

@@ -29,6 +29,7 @@ import type {
   SidePanelView,
   TabGroupRef,
   TabRef,
+  ToolbarAction,
 } from './types';
 
 /** The three places a message can be sent to. */
@@ -40,6 +41,12 @@ export type Endpoint = 'background' | 'sidepanel' | 'content';
  * Naming: `area:verb`, lower camel after the colon.
  */
 export interface MessageContracts {
+  /** Week 1 acknowledgment only; replace the handler with AI/storage routing later. */
+  'toolbar:action': {
+    request: ToolbarAction;
+    response: Ack;
+  };
+
   /** Health check. Useful for demos and for checking a content script is live. */
   'ping': {
     request: { from: Endpoint };
