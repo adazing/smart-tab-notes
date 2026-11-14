@@ -2,13 +2,19 @@ import styles from './toolbar.css?inline';
 import { sendToBackground } from '../shared/messages';
 import type { ToolbarAction } from '../shared/types';
 import { captureSelection, toolbarPosition, type SelectionSnapshot } from './selection';
-import { createHighlights } from './highlights';
+import type { AnnotationLayer } from './annotationLayer';
 
 const HOST_ID = 'smart-tab-notes-selection-toolbar';
 let uninstall: (() => void) | undefined;
 
-/** One lifecycle per content-script instance. Reinitialization removes old listeners. */
-export function installSelectionToolbar(): () => void {
+/**
+ * One lifecycle per content-script instance. Reinitialization removes old listeners.
+ *
+ * Highlight and Note save through the annotation layer, which owns the
+ * selectors, the highlight spans and the note card; Explain and Ask still
+ * go to the background worker as an acknowledgement only.
+ */
+export function installSelectionToolbar(annotations: AnnotationLayer): () => void {
   uninstall?.();
   // Also clean up a previous injected script instance using a host-scoped event.
   document.getElementById(HOST_ID)?.dispatchEvent(new Event('smart-tab-notes:dispose'));
@@ -19,7 +25,6 @@ export function installSelectionToolbar(): () => void {
   const style = document.createElement('style');
   style.textContent = styles;
   root.append(style);
-  const highlights = createHighlights(root);
   const panel = document.createElement('section');
   panel.className = 'panel';
   panel.hidden = true;
@@ -83,6 +88,37 @@ export function installSelectionToolbar(): () => void {
     position();
   }
 
+  /**
+   * Save a highlight, with or without a note.
+   *
+   * On success the toolbar's work is done: the annotation layer draws the
+   * highlight and opens its card, which is both the confirmation and the
+   * place to edit or delete the note. A failure stays here, because a user
+   * must never be left thinking a note was saved when it was not.
+   */
+  async function persist(selected: SelectionSnapshot, note?: string): Promise<void> {
+    status(note === undefined ? 'Saving highlight...' : 'Saving note...');
+    const result = await annotations.save({
+      range: selected.range,
+      text: selected.text,
+      ...(note !== undefined ? { note } : {}),
+    });
+    if (disposed) return;
+    if (result.ok && result.drawn !== false) {
+      hide();
+      return;
+    }
+    if (snapshot !== selected) {
+      // The selection moved on while we waited; there is nowhere to put the
+      // message, so leave it where it can still be found.
+      console.warn('[smart-tab-notes] highlight not drawn:', result.reason ?? 'no anchor');
+      return;
+    }
+    status(result.ok
+      ? 'Saved to your notes. This page changed too much to draw it here.'
+      : result.reason ?? 'Could not save this highlight.');
+  }
+
   async function report(payload: ToolbarAction): Promise<void> {
     const result = await sendToBackground('toolbar:action', payload);
     const failed = !result.ok || !result.data.ok; // undelivered, or the worker said no
@@ -115,7 +151,6 @@ export function installSelectionToolbar(): () => void {
     frame = requestAnimationFrame(() => {
       frame = 0;
       position();
-      highlights.render();
     });
   }
 
@@ -163,7 +198,7 @@ export function installSelectionToolbar(): () => void {
     input.required = true;
     label.htmlFor = input.id;
     form.append(label, input);
-    const submit = button(action === 'ask' ? 'Ask question' : 'Save temporarily', () => {}, form);
+    const submit = button(action === 'ask' ? 'Ask question' : 'Save note', () => {}, form);
     submit.type = 'submit';
     submit.className = 'submit';
     button('Cancel', () => closeDetail(true), form);
@@ -171,11 +206,9 @@ export function installSelectionToolbar(): () => void {
       event.preventDefault();
       const value = input.value.trim();
       if (!value) { input.focus(); return; }
-      const base = { text: selected.text, url: selected.url };
-      void report(action === 'ask' ? { ...base, action, question: value } : { ...base, action, note: value });
-      status(action === 'ask'
-        ? 'Demo: question received. AI answers will be connected in Week 2.'
-        : 'Note accepted for this demo only. It has not been saved to storage and will be lost when dismissed.');
+      if (action === 'note') { void persist(selected, value); return; }
+      void report({ text: selected.text, url: selected.url, action, question: value });
+      status('Demo: question received. AI answers will be connected in Week 2.');
     }, { signal });
     detail.append(form);
     position();
@@ -185,9 +218,8 @@ export function installSelectionToolbar(): () => void {
   button('Ask', () => openEditor('ask'), actions);
   button('Highlight', () => {
     if (!snapshot) return;
-    highlights.add(snapshot.range);
-    void report({ action: 'highlight', text: snapshot.text, url: snapshot.url });
-    status('Highlighted temporarily on this page. Not saved to storage.');
+    closeDetail();
+    void persist(snapshot);
   }, actions);
   button('Note', () => openEditor('note'), actions);
 
@@ -224,7 +256,7 @@ export function installSelectionToolbar(): () => void {
   const observer = new ResizeObserver(refresh);
   observer.observe(document.documentElement);
   observer.observe(panel);
-  function navigation(): void { hide(); highlights.clear(); url = location.href; }
+  function navigation(): void { hide(); url = location.href; }
   window.addEventListener('popstate', navigation, { signal });
   window.addEventListener('hashchange', navigation, { signal });
   // pushState/replaceState do not emit popstate. Poll URL only, never page text.
