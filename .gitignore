@@ -8,3 +8,12 @@ dist/
 test-results/
 playwright-report/
 coverage/
+.env.*
+!.env.example
+
+# Python backend
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/

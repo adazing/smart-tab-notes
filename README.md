@@ -476,3 +476,9 @@ and is not implemented here.
 `npm run test:storage` runs the storage tests (Vitest with `fake-indexeddb`); `npm test` runs every unit test.
 
 Known gaps for later tickets: annotations have no anchoring fields (quote, prefix/suffix, position) for #7 and no AI explanation or question fields for #6, and collections do not store their tabs yet (#14). Dexie stores extra non-indexed fields without a schema change; add a new `version(n)` only for new indexes.
+
+---
+
+## Backend
+
+The Python backend (FastAPI + LangGraph) is in [backend/](backend/README.md). API request and response shapes are in [docs/api.md](docs/api.md).
