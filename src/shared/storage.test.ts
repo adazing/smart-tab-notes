@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { clearAllData, clearPageNotes } from './storage';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, StorageDatabase } from './database';
 import {
   addAnnotation, addChatSummary, createCollection, getPageByUrl, listAnnotations,
@@ -171,6 +172,35 @@ describe('URL normalization', () => {
   it.each(['bad URL', '/relative', 'file:///tmp/file', 'javascript:alert(1)'])('rejects %s', input => {
     expect(() => normalizeUrl(input)).toThrow(TypeError);
   });
+});
+
+it('permanently clears only the current page annotations including tombstones', async () => {
+  const first = await savePage({ url: 'https://example.com/a', title: 'A' });
+  const other = await savePage({ url: 'https://example.com/b', title: 'B' });
+  const a = await addAnnotation({ pageId: first.id, text: 'secret' });
+  await softDelete('annotations', a.id);
+  await addAnnotation({ pageId: other.id, text: 'keep' });
+  await addChatSummary({ pageId: first.id, summary: 'keep summary' });
+  await createCollection({ name: 'keep collection' });
+  expect(await clearPageNotes('https://example.com/a?utm_source=test#part')).toBe(1);
+  expect(await db.annotations.get(a.id)).toBeUndefined();
+  expect(await listAnnotations(other.id)).toHaveLength(1);
+  expect(await db.pages.count()).toBe(2);
+  expect(await db.chatSummaries.count()).toBe(1);
+  expect(await db.collections.count()).toBe(1);
+  expect(await clearPageNotes('https://example.com/missing')).toBe(0);
+});
+it('physically clears every table and rolls back failures', async () => {
+  const page = await savePage({ url: 'https://example.com', title: 'secret' });
+  await addAnnotation({ pageId: page.id, text: 'secret' });
+  await addChatSummary({ pageId: page.id, summary: 'secret' });
+  await createCollection({ name: 'secret' });
+  const spy = vi.spyOn(db.collections, 'clear').mockRejectedValueOnce(new Error('failed'));
+  await expect(clearAllData()).rejects.toThrow('failed');
+  expect(await db.pages.count()).toBe(1);
+  spy.mockRestore();
+  await clearAllData();
+  for (const table of db.tables) expect(await table.count()).toBe(0);
 });
 
 describe('getPageByUrl for pages that can never be saved', () => {

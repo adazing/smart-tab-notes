@@ -1,3 +1,4 @@
+import { canReadUrl } from './privacy';
 /**
  * Reading Chrome's tabs and tab groups.
  *
@@ -62,7 +63,9 @@ export function toTabRef(tab: chrome.tabs.Tab): TabRef | null {
 export async function listTabs(options: { currentWindowOnly?: boolean } = {}): Promise<TabRef[]> {
   const query: chrome.tabs.QueryInfo = options.currentWindowOnly ? { currentWindow: true } : {};
   const found = await chrome.tabs.query(query);
-  return found.map(toTabRef).filter((tab): tab is TabRef => tab !== null);
+  const refs = found.map(toTabRef).filter((tab): tab is TabRef => tab !== null);
+  const eligible = await Promise.all(refs.map(tab => canReadUrl(tab.url)));
+  return refs.filter((tab, index) => tab.accessible && eligible[index]);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { canReadUrl, getPrivacySettings, normalizeDomain, PRIVACY_KEY, subscribePrivacy } from '../shared/privacy';
 /**
  * Background service worker.
  *
@@ -11,12 +12,7 @@
  * chrome.storage, not in module variables.
  */
 
-import {
-  notify,
-  registerHandlers,
-  type MessageHandler,
-  type MessageKind,
-} from '../shared/messages';
+import { notify, registerHandlers, sendToTab, type MessageHandler, type MessageKind } from '../shared/messages';
 import { isFromExtensionPage, isFromTab } from '../shared/senders';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
@@ -39,6 +35,7 @@ chrome.sidePanel
   .catch((error: unknown) => console.error(LOG, 'setPanelBehavior failed:', error));
 
 chrome.runtime.onInstalled.addListener((details) => {
+  void updatePrivacy(async () => { await chrome.storage.local.set({ [PRIVACY_KEY]: await getPrivacySettings() }); }).catch(() => {});
   console.log(LOG, 'installed:', details.reason);
 });
 
@@ -66,10 +63,40 @@ function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHand
  * Message handlers
  * ------------------------------------------------------------------ */
 
+let privacyWrites: Promise<unknown> = Promise.resolve();
+function updatePrivacy<T>(operation: () => Promise<T>): Promise<T> {
+  const next = privacyWrites.then(operation);
+  privacyWrites = next.catch(() => {});
+  return next;
+}
 registerHandlers('background', {
+  'data:cleared': async (payload, sender) => {
+    if (sender.url !== chrome.runtime.getURL('sidepanel.html')) return { ok: false };
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.filter(tab => tab.id !== undefined).map(tab =>
+      sendToTab(tab.id!, 'data:cleared', payload)
+    ));
+    await notify('sidepanel', 'data:cleared', payload);
+    return { ok: true };
+  },
+  'privacy:update': (request, sender) => updatePrivacy(async () => {
+    if (sender.url !== chrome.runtime.getURL('sidepanel.html')) throw new Error('Settings must be changed from the side panel.');
+    const settings = await getPrivacySettings();
+    if (request.action === 'complete') settings.onboardingComplete = true;
+    else {
+      const domain = normalizeDomain(request.domain ?? '');
+      if (request.action === 'add') {
+        if (settings.blockedDomains.includes(domain)) throw new Error('That domain is already blocked.');
+        settings.blockedDomains.push(domain);
+      } else settings.blockedDomains = settings.blockedDomains.filter(value => value !== domain);
+    }
+    await chrome.storage.local.set({ [PRIVACY_KEY]: settings });
+    return settings;
+  }),
   // No logging or persistence of selected text, questions, or notes in Week 1.
-  'toolbar:action': async (_payload, sender) =>
-    isFromTab(sender, EXTENSION_ORIGIN) ? { ok: true } : { ok: false, reason: 'not from a tab' },
+  'toolbar:action': async (payload, sender) => ({
+    ok: isFromTab(sender, EXTENSION_ORIGIN) && await canReadUrl(sender.tab?.url ?? '') && await canReadUrl(payload.url),
+  }),
 
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
@@ -109,14 +136,12 @@ registerHandlers('background', {
    * to do when the panel is closed.
    */
   'page:selectionChanged': async ({ selection }, sender) => {
-    // Only content scripts in a tab report selections; drop anything else.
     if (!isFromTab(sender, EXTENSION_ORIGIN) || sender.tab?.id === undefined) {
       return { ok: false, reason: 'not from a tab' };
     }
+    if (selection && (!await canReadUrl(sender.tab.url ?? '') || !await canReadUrl(selection.url))) return { ok: false };
     await notify('sidepanel', 'page:selectionChanged', {
-      selection,
-      tabId: sender.tab.id,
-      windowId: sender.tab.windowId,
+      selection, tabId: sender.tab.id, windowId: sender.tab.windowId,
     });
     return { ok: true };
   },
@@ -140,6 +165,12 @@ chrome.tabs.onActivated.addListener(({ windowId }) => void announceActiveTab(win
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   // Only once the page has settled, and only for the tab in view.
   if (changeInfo.status === 'complete' && tab.active) void announceActiveTab(tab.windowId);
+});
+
+subscribePrivacy(() => {
+  void chrome.tabs.query({ active: true }).then(tabs =>
+    Promise.all([...new Set(tabs.map(tab => tab.windowId))].map(announceActiveTab))
+  ).catch(() => {});
 });
 
 console.log(LOG, 'service worker started');

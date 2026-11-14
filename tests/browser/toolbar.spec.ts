@@ -1,3 +1,4 @@
+/// <reference types="chrome" />
 import { chromium, expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,6 +14,13 @@ test.beforeAll(async () => {
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
   });
   if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker');
+  const id = new URL(context.serviceWorkers()[0]!.url()).host;
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${id}/sidepanel.html`);
+  await expect(panel.getByRole('heading', { name: 'Your privacy controls' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(panel.getByRole('navigation')).toBeVisible();
+  await panel.close();
 });
 test.afterAll(async () => {
   await context?.close();
@@ -137,3 +145,45 @@ for (const [name, url, selector] of websites) {
     } finally { await page.close(); }
   });
 }
+
+
+test('settings persist, block extraction and dismiss an open toolbar', async () => {
+  const page = await context.newPage();
+  await page.route('https://privacy.test/**', route => route.fulfill({ contentType: 'text/html', body: '<p id="text">A private passage to explain.</p>' }));
+  await page.goto('https://privacy.test/');
+  await select(page, '#text');
+  const id = new URL(context.serviceWorkers()[0]!.url()).host;
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${id}/sidepanel.html`);
+  await panel.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(panel.getByText('mail.google.com', { exact: true })).toBeVisible();
+  await panel.getByLabel('Website domain or URL').fill('https://WWW.privacy.test/path');
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Blocked sites saved');
+  await expect(page.locator('#smart-tab-notes-selection-toolbar .panel')).toBeHidden();
+  const blocked = await panel.evaluate(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find(tab => tab.url?.startsWith('https://privacy.test/'))!;
+    return chrome.runtime.sendMessage({ marker: '@smart-tab-notes/v1', target: 'background', kind: 'tabs:getContext', payload: { tabIds: [tab.id] }, sentAt: Date.now() });
+  });
+  expect(blocked.contexts[0]).toMatchObject({ status: 'restricted', text: '' });
+  await panel.reload();
+  await panel.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(panel.getByText('privacy.test', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Remove privacy.test', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Blocked sites saved');
+  await select(page, '#text');
+  const allowed = await panel.evaluate(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find(tab => tab.url?.startsWith('https://privacy.test/'))!;
+    return chrome.runtime.sendMessage({ marker: '@smart-tab-notes/v1', target: 'background', kind: 'tabs:getContext', payload: { tabIds: [tab.id] }, sentAt: Date.now() });
+  });
+  expect(allowed.contexts[0]).toMatchObject({ status: 'ok', text: 'A private passage to explain.' });
+  await panel.getByRole('button', { name: 'Clear All Data', exact: true }).click();
+  await expect(panel.getByRole('alertdialog')).toBeVisible();
+  await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(panel.getByRole('alertdialog')).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Privacy information', exact: true }).click();
+  await expect(panel.getByRole('heading', { name: 'Your privacy controls' })).toBeVisible();
+  await panel.close(); await page.close();
+});

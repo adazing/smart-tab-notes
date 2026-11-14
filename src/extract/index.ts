@@ -8,3 +8,5 @@
  */
 
 export { extractPage } from './extractPage';
+
+export { canReadUrl } from '../shared/privacy';

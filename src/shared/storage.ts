@@ -114,3 +114,18 @@ export async function createCollection(input: CollectionInput): Promise<Collecti
 export async function listCollections(): Promise<Collection[]> {
   return await db.collections.orderBy('createdAt').filter(record => !record.deleted).toArray();
 }
+
+/** Explicit privacy deletion includes soft-deleted records. All operations are transactional. */
+export async function clearPageNotes(url: string): Promise<number> {
+  const normalized = normalizeUrl(url);
+  return db.transaction('rw', db.pages, db.annotations, async () => {
+    const page = await db.pages.where('url').equals(normalized).first();
+    return page ? db.annotations.where('pageId').equals(page.id).delete() : 0;
+  });
+}
+export async function clearAllData(): Promise<void> {
+  const tables = [db.pages, db.annotations, db.chatSummaries, db.collections];
+  await db.transaction('rw', tables, async () => {
+    for (const table of tables) await table.clear();
+  });
+}

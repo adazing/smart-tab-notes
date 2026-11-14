@@ -1,3 +1,4 @@
+import { watchPagePrivacy } from '../shared/privacy';
 import styles from './toolbar.css?inline';
 import { sendToBackground } from '../shared/messages';
 import type { ToolbarAction } from '../shared/types';
@@ -37,6 +38,7 @@ export function installSelectionToolbar(): () => void {
 
   const controller = new AbortController();
   const { signal } = controller;
+  let allowed = false;
   let snapshot: SelectionSnapshot | undefined;
   let dragging = false;
   let interacting = false;
@@ -120,6 +122,7 @@ export function installSelectionToolbar(): () => void {
   }
 
   function readSelection(): void {
+    if (!allowed) { hide(); return; }
     if (dragging || interacting || root.activeElement) return;
     const next = captureSelection(host);
     if (!next) { hide(); return; }
@@ -140,7 +143,7 @@ export function installSelectionToolbar(): () => void {
   }
 
   button('Explain', () => {
-    if (!snapshot) return;
+    if (!allowed || !snapshot) return;
     const selected = snapshot;
     closeDetail();
     status('Loading explanation… (Week 1 demo)');
@@ -151,7 +154,7 @@ export function installSelectionToolbar(): () => void {
   }, actions);
 
   function openEditor(action: 'ask' | 'note'): void {
-    if (!snapshot) return;
+    if (!allowed || !snapshot) return;
     const selected = snapshot;
     closeDetail();
     detail.hidden = false;
@@ -170,6 +173,7 @@ export function installSelectionToolbar(): () => void {
     form.addEventListener('submit', event => {
       event.preventDefault();
       const value = input.value.trim();
+      if (!allowed) { hide(); return; }
       if (!value) { input.focus(); return; }
       const base = { text: selected.text, url: selected.url };
       void report(action === 'ask' ? { ...base, action, question: value } : { ...base, action, note: value });
@@ -184,7 +188,7 @@ export function installSelectionToolbar(): () => void {
 
   button('Ask', () => openEditor('ask'), actions);
   button('Highlight', () => {
-    if (!snapshot) return;
+    if (!allowed || !snapshot) return;
     highlights.add(snapshot.range);
     void report({ action: 'highlight', text: snapshot.text, url: snapshot.url });
     status('Highlighted temporarily on this page. Not saved to storage.');
@@ -233,6 +237,7 @@ export function installSelectionToolbar(): () => void {
   }, 300);
 
   function dispose(): void {
+    offPrivacy();
     disposed = true;
     controller.abort();
     observer.disconnect();
@@ -248,6 +253,7 @@ export function installSelectionToolbar(): () => void {
     else dispose();
   }, { signal });
   host.addEventListener('smart-tab-notes:dispose', dispose, { signal });
+  const offPrivacy = watchPagePrivacy(value => { allowed = value; if (!value) { hide(); highlights.clear(); } });
   uninstall = dispose;
   schedule();
   return dispose;

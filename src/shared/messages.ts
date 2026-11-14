@@ -1,3 +1,5 @@
+import { canReadUrl } from './privacy';
+import type { PrivacySettings } from './privacy';
 /**
  * The message bus.
  *
@@ -43,6 +45,12 @@ export type Endpoint = 'background' | 'sidepanel' | 'content';
  * Naming: `area:verb`, lower camel after the colon.
  */
 export interface MessageContracts {
+  'privacy:update': {
+    request: { action: 'add' | 'remove' | 'complete'; domain?: string };
+    response: PrivacySettings;
+  };
+  'data:cleared': { request: { url?: string }; response: Ack };
+
   /** Week 1 acknowledgment only; replace the handler with AI/storage routing later. */
   'toolbar:action': {
     request: ToolbarAction;
@@ -204,6 +212,11 @@ async function dispatch<K extends MessageKind>(
   tabId?: number,
 ): Promise<SendResult<ResponseOf<K>>> {
   try {
+    if (message.kind === 'toolbar:action' || message.kind === 'page:selectionChanged') {
+      const payload = message.payload as ToolbarAction | { selection: SelectionInfo | null };
+      const url = 'url' in payload ? payload.url : payload.selection?.url;
+      if (url && !await canReadUrl(url)) return { ok: false, error: 'Reading is disabled for this page.' };
+    }
     const response =
       tabId === undefined
         ? await chrome.runtime.sendMessage(message)

@@ -185,3 +185,15 @@ body {
   margin-top: 8px;
   font-size: 12px;
 }
+
+.nav { flex-wrap: wrap; }
+.nav__item { padding-inline: 8px; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.settings-row { display: flex; gap: 8px; flex-wrap: wrap; margin-block: 8px; }
+.settings-row input { min-width: 0; flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.domain-list { padding: 0; list-style: none; }
+.domain-list li { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-block: 8px; }
+.domain-list span { overflow-wrap: anywhere; min-width: 0; }
+.settings-actions { display: grid; gap: 8px; margin-top: 12px; }
+.danger { color: #b42318; border-color: #b42318; background: var(--bg); }
+@media (prefers-color-scheme: dark) { .danger { color: #ff9b91; border-color: #ff9b91; } }

@@ -1,3 +1,4 @@
+import { canReadUrl } from './privacy';
 /**
  * getTabContext: readable text and chunks for a set of tabs.
  *
@@ -55,8 +56,10 @@ interface InjectedResult {
   page: ExtractedPage | null;
 }
 
-/** Runs in the page, after extract.js has defined the global. Exported for tests. */
-export function runExtractor(maxChars: number): InjectedResult {
+/** Runs in the page, after extract.js has defined the global. */
+export async function runExtractor(maxChars: number): Promise<InjectedResult> {
+  const apiPrivacy = (globalThis as unknown as { SmartTabNotesExtract?: { canReadUrl: (url: string) => Promise<boolean> } }).SmartTabNotesExtract;
+  if (!apiPrivacy || !await apiPrivacy.canReadUrl(location.href)) throw new Error('Reading is disabled.');
   const contentType = document.contentType;
   if (contentType === 'application/pdf') return { contentType, page: null };
   const api = (globalThis as unknown as {
@@ -84,11 +87,13 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
   };
 
   if (!isAccessible(url)) return empty(base, 'restricted');
+  if (!await canReadUrl(url)) return empty(base, 'restricted');
   if (isPdfUrl(url)) return empty(base, 'pdf');
   if (!base.loaded) return empty(base, 'not_loaded');
 
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: [EXTRACT_SCRIPT] });
+    if (!await canReadUrl(url)) return empty(base, 'restricted');
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId },
       func: runExtractor,
@@ -106,6 +111,8 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
       base.title = page.title;
       if (!isAccessible(page.url)) return empty(base, 'restricted');
     }
+    const current = await chrome.tabs.get(tabId);
+    if (current.url !== base.url || !await canReadUrl(url) || !await canReadUrl(base.url)) return empty(base, 'restricted');
     return {
       ...base,
       title: base.title || page.title,
@@ -126,5 +133,13 @@ export async function getTabContext(
   tabIds: number[],
   options: TabContextOptions = {},
 ): Promise<TabContext[]> {
-  return Promise.all(tabIds.map((tabId) => getOne(tabId, options)));
+  const contexts = await Promise.all(tabIds.map((tabId) => getOne(tabId, options)));
+  return Promise.all(contexts.map(async context => {
+    if (context.status !== 'ok') return context;
+    try {
+      const current = await chrome.tabs.get(context.tabId);
+      if (current.url === context.url && await canReadUrl(context.url)) return context;
+    } catch { /* Closed or navigated tabs lose their content. */ }
+    return empty(context, 'restricted');
+  }));
 }
