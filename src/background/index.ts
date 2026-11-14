@@ -87,6 +87,9 @@ registerHandlers('background', {
     tab: await getActiveTabRef(windowId),
   })),
 
+  /** The side panel says it has opened. It fetches its own tab, so there is nothing to seed yet. */
+  'sidepanel:ready': extensionPagesOnly('sidepanel:ready', async () => ({ ok: true })),
+
   'tabs:focus': extensionPagesOnly('tabs:focus', async ({ tabId }) => {
     try {
       const tab = await chrome.tabs.update(tabId, { active: true });

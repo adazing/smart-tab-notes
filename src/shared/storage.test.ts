@@ -147,6 +147,13 @@ describe('URL normalization', () => {
   it.each([
     ['https://EXAMPLE.com/article/?utm_source=google#section2', 'https://example.com/article'],
     ['https://example.com/search?q=typescript&utm_campaign=test', 'https://example.com/search?q=typescript'],
+    // Removing a tracking parameter must not re-encode the others.
+    ['https://a.com/s?q=a%20b&utm_source=x', 'https://a.com/s?q=a%20b'],
+    ['https://a.com/s?q=~&fbclid=1', 'https://a.com/s?q=~'],
+    ['https://a.com/s?q=a,b&gclid=1&page=2', 'https://a.com/s?q=a,b&page=2'],
+    ['https://a.com/s?UTM_Source=x&q=1', 'https://a.com/s?q=1'],
+    ['https://a.com/s?utm%5Fsource=x&q=1', 'https://a.com/s?q=1'],
+    ['https://a.com/s?q=1&&', 'https://a.com/s?q=1'],
     ['https://example.com/?UTM_SOURCE=a&fbclid=b&gclid=c&msclkid=d&mc_eid=e', 'https://example.com/'],
     ['https://example.com/a/b///#hash', 'https://example.com/a/b'],
     ['https://example.com', 'https://example.com/'],

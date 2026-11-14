@@ -10,6 +10,7 @@
  * robust W3C anchoring are separate tickets.
  */
 
+import { touchesEditable } from './selection';
 import { installSelectionToolbar } from './toolbar';
 import { registerHandlers, notify } from '../shared/messages';
 import type { PageContext, SelectionInfo } from '../shared/types';
@@ -42,6 +43,9 @@ function describeSelection(): SelectionInfo | null {
   if (!text) return null;
 
   const range = selection.getRangeAt(0);
+  // Text in inputs and editable regions (email drafts, chat boxes) is the
+  // user's own writing: never report it, matching the toolbar.
+  if (touchesEditable(range)) return null;
   const node = range.commonAncestorContainer;
   const block =
     node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null);

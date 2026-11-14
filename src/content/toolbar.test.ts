@@ -138,6 +138,32 @@ describe('toolbar actions', () => {
     expect(root().querySelector<HTMLElement>('.highlight')!.style.pointerEvents).toBe('');
   });
 
+  it('lets Escape reach the page when focus is on the page, but not from inside the toolbar', () => {
+    const pageSaw = vi.fn();
+    document.body.addEventListener('keydown', pageSaw);
+    select();
+    const fromPage = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(fromPage);
+    expect(panel().hidden).toBe(true);
+    expect(pageSaw).toHaveBeenCalledTimes(1);
+    expect(fromPage.defaultPrevented).toBe(false);
+
+    select(); click('Ask');
+    const input = root().querySelector('input')!;
+    const fromToolbar = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true, cancelable: true });
+    input.dispatchEvent(fromToolbar);
+    expect(fromToolbar.defaultPrevented).toBe(true);
+    document.body.removeEventListener('keydown', pageSaw);
+  });
+
+  it('keeps the messaging error instead of replacing it with the mock explanation', async () => {
+    vi.mocked(sendToBackground).mockResolvedValueOnce({ ok: false, error: 'Extension context invalidated.' });
+    select(); click('Explain');
+    await vi.advanceTimersByTimeAsync(600);
+    expect(root().textContent).toContain('Extension messaging is unavailable');
+    expect(root().textContent).not.toContain('Mock explanation');
+  });
+
   it('Escape closes the editor first, then the toolbar', () => {
     select(); click('Ask');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
