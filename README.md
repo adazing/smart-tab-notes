@@ -141,12 +141,12 @@ Add a row here whenever you add a message. `→` is the direction it travels.
 | `ping` | any → any | `{ from: Endpoint }` | `{ ok, endpoint, at }` | Health check. Handled by background and content. |
 | `tabs:list` | side panel → background | `{ currentWindowOnly?: boolean }` | `{ tabs: TabRef[], groups: TabGroupRef[] }` | Backs the sidebar tab list. |
 | `tabs:getContext` | any → background | `{ tabIds: number[] }` | `{ contexts: TabContext[] }` | Readable text and chunks per tab, in order. See [Page text and tabs](#page-text-and-tabs). |
-| `tabs:getActive` | side panel → background | `{}` | `{ tab: TabRef \| null }` | The tab in view. |
+| `tabs:getActive` | side panel → background | `{ windowId?: number }` | `{ tab: TabRef \| null }` | The active tab of `windowId` (side panels pass their own), else of the last focused window. |
 | `tabs:focus` | side panel → background | `{ tabId: number }` | `Ack` | Backs "clicking a citation opens that tab". |
-| `tabs:changed` | background → side panel | `{ activeTabId: number \| null }` | `Ack` | Fired on tab switch, page load and window focus. |
+| `tabs:changed` | background → side panel | `{ activeTabId: number \| null, windowId: number }` | `Ack` | Fired on tab switch and page load. Every open panel receives it; ignore other windows. |
 | `page:getContext` | side panel/background → content | `{ includeText?: boolean, maxChars?: number }` | `PageContext` | Page text is only read when `includeText` is set. |
 | `page:getSelection` | side panel/background → content | `{}` | `{ selection: SelectionInfo \| null }` | |
-| `page:selectionChanged` | content → background → side panel | `{ selection: SelectionInfo \| null, tabId?: number }` | `Ack` | Debounced 250ms. The worker stamps `tabId`. |
+| `page:selectionChanged` | content → background → side panel | `{ selection: SelectionInfo \| null, tabId?: number, windowId?: number }` | `Ack` | Debounced 250ms. The worker stamps `tabId` and `windowId`; panels ignore other tabs. |
 | `sidepanel:navigate` | any → side panel | `{ view: SidePanelView }` | `Ack` | Brings a view to the front. |
 | `toolbar:action` | content → background | `{ action, text, url, question? , note? }` | `Ack` | Discriminated union: Ask requires `question`, Note requires `note`. Week 1 acknowledgment only. |
 | `sidepanel:ready` | side panel → background | `{}` | `Ack` | Sent once the panel mounts. |
@@ -189,6 +189,12 @@ is generated from that list.
 
 Views should read tab state from the `usePageState` hook rather than calling
 `chrome.tabs` themselves, so there is one path to keep correct.
+
+Each Chrome window has its own side panel, and messages sent to `'sidepanel'`
+reach **every** open panel. `usePageState` handles this: each panel looks up its
+own window and ignores other windows' tab changes and other tabs' selections
+(`src/sidepanel/pageEvents.ts`). Any new panel-bound event that is about one tab
+or window should carry `tabId`/`windowId` and be filtered the same way.
 
 ---
 

@@ -90,7 +90,10 @@ export async function listTabGroups(tabs: TabRef[]): Promise<TabGroupRef[]> {
   }
 }
 
-export async function getActiveTabRef(): Promise<TabRef | null> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+/** The active tab of `windowId`, or of the last focused window when omitted. */
+export async function getActiveTabRef(windowId?: number): Promise<TabRef | null> {
+  const query: chrome.tabs.QueryInfo =
+    windowId === undefined ? { active: true, lastFocusedWindow: true } : { active: true, windowId };
+  const [tab] = await chrome.tabs.query(query);
   return tab ? toTabRef(tab) : null;
 }

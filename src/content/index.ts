@@ -92,7 +92,8 @@ registerHandlers('content', {
  * ------------------------------------------------------------------ */
 
 let selectionTimer: number | undefined;
-let lastReported: string | null = null;
+/** Text last sent (null = "no selection" was sent); undefined = nothing sent yet. */
+let lastReported: string | null | undefined;
 
 /**
  * `selectionchange` fires on every mouse move during a drag, so wait for
@@ -110,6 +111,15 @@ function onSelectionChange(): void {
 }
 
 document.addEventListener('selectionchange', onSelectionChange);
+
+// The side panel clears its selection whenever the user switches tabs. When
+// this tab comes back into view, report the current selection again, even if
+// it is the same text as last time.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  lastReported = undefined;
+  onSelectionChange();
+});
 
 console.debug(LOG, 'ready on', location.href);
 

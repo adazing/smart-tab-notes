@@ -151,6 +151,26 @@ describe('extractPage', () => {
     ]);
   });
 
+  it('leaves a plain paragraph that happens to match a later heading as body text', () => {
+    const source = [
+      { kind: 'heading' as const, text: 'Setup', level: 2 },
+      { kind: 'text' as const, text: 'Run the installer first.' },
+      { kind: 'text' as const, text: 'Examples' },
+      { kind: 'text' as const, text: 'More setup detail here.' },
+      { kind: 'heading' as const, text: 'Examples', level: 2 },
+      { kind: 'text' as const, text: 'Example one.' },
+    ];
+    const readable = source.filter((b) => b.kind === 'text');
+    expect(restoreHeadings(readable, source).map((b) => (b.kind === 'heading' ? `# ${b.text}` : b.text))).toEqual([
+      '# Setup',
+      'Run the installer first.',
+      'Examples',
+      'More setup detail here.',
+      '# Examples',
+      'Example one.',
+    ]);
+  });
+
   it('keeps inline elements inside their paragraph', () => {
     const doc = page(`<div><p>See <a href="#">the <em>docs</em></a> for more.</p></div>`);
     expect(extractPage(doc).text).toBe('See the docs for more.');

@@ -71,8 +71,12 @@ export interface MessageContracts {
   };
 
   /** The tab the user is looking at right now. */
+  /**
+   * The active tab of one window. Side panels pass their own `windowId`;
+   * without it, the last focused window is used.
+   */
   'tabs:getActive': {
-    request: Empty;
+    request: { windowId?: number };
     response: { tab: TabRef | null };
   };
 
@@ -84,7 +88,8 @@ export interface MessageContracts {
 
   /** Sent by the background worker when the user switches or updates tabs. */
   'tabs:changed': {
-    request: { activeTabId: number | null };
+    /** Every open side panel receives this; ignore it unless `windowId` is yours. */
+    request: { activeTabId: number | null; windowId: number };
     response: Ack;
   };
 
@@ -102,7 +107,11 @@ export interface MessageContracts {
 
   /** Fired by a content script after the user selects or clears text. */
   'page:selectionChanged': {
-    request: { selection: SelectionInfo | null; tabId?: number };
+    /**
+     * The worker stamps `tabId` and `windowId` before relaying to side panels.
+     * Panels should ignore selections from tabs other than the one they show.
+     */
+    request: { selection: SelectionInfo | null; tabId?: number; windowId?: number };
     response: Ack;
   };
 

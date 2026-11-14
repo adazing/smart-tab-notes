@@ -54,7 +54,7 @@ registerHandlers('background', {
   /** Readable text and ~500-token chunks for the given tabs, in order. */
   'tabs:getContext': async ({ tabIds }) => ({ contexts: await getTabContext(tabIds) }),
 
-  'tabs:getActive': async () => ({ tab: await getActiveTabRef() }),
+  'tabs:getActive': async ({ windowId }) => ({ tab: await getActiveTabRef(windowId) }),
 
   'tabs:focus': async ({ tabId }) => {
     try {
@@ -70,13 +70,18 @@ registerHandlers('background', {
 
   /**
    * Content scripts report selections here rather than straight to the side
-   * panel, so the worker can stamp the tab id and later decide what to do
-   * when the panel is closed.
+   * panel, so the worker can stamp the tab and window ids (side panels in
+   * every window receive the relay and filter on them) and later decide what
+   * to do when the panel is closed.
    */
   'page:selectionChanged': async ({ selection }, sender) => {
-    const payload: { selection: typeof selection; tabId?: number } = { selection };
-    if (sender.tab?.id !== undefined) payload.tabId = sender.tab.id;
-    await notify('sidepanel', 'page:selectionChanged', payload);
+    // Only content scripts in a tab report selections; drop anything else.
+    if (sender.tab?.id === undefined) return { ok: false, reason: 'not from a tab' };
+    await notify('sidepanel', 'page:selectionChanged', {
+      selection,
+      tabId: sender.tab.id,
+      windowId: sender.tab.windowId,
+    });
     return { ok: true };
   },
 });
@@ -85,20 +90,20 @@ registerHandlers('background', {
  * Tab events -> side panel
  * ------------------------------------------------------------------ */
 
-async function announceActiveTab(): Promise<void> {
-  const tab = await getActiveTabRef();
-  await notify('sidepanel', 'tabs:changed', { activeTabId: tab?.tabId ?? null });
+/**
+ * Tell side panels that `windowId`'s active tab changed. Every open panel (one
+ * per window) receives it; each ignores other windows' events.
+ */
+async function announceActiveTab(windowId: number): Promise<void> {
+  const tab = await getActiveTabRef(windowId);
+  await notify('sidepanel', 'tabs:changed', { activeTabId: tab?.tabId ?? null, windowId });
 }
 
-chrome.tabs.onActivated.addListener(() => void announceActiveTab());
+chrome.tabs.onActivated.addListener(({ windowId }) => void announceActiveTab(windowId));
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   // Only once the page has settled, and only for the tab in view.
-  if (changeInfo.status === 'complete' && tab.active) void announceActiveTab();
-});
-
-chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId !== chrome.windows.WINDOW_ID_NONE) void announceActiveTab();
+  if (changeInfo.status === 'complete' && tab.active) void announceActiveTab(tab.windowId);
 });
 
 console.log(LOG, 'service worker started');
