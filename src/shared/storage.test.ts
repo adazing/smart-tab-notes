@@ -148,6 +148,17 @@ describe('URL normalization', () => {
   it.each([
     ['https://EXAMPLE.com/article/?utm_source=google#section2', 'https://example.com/article'],
     ['https://example.com/search?q=typescript&utm_campaign=test', 'https://example.com/search?q=typescript'],
+    // Removing a tracking parameter must not re-encode the others.
+    ['https://a.com/s?q=a%20b&utm_source=x', 'https://a.com/s?q=a%20b'],
+    ['https://a.com/s?q=~&fbclid=1', 'https://a.com/s?q=~'],
+    ['https://a.com/s?q=a,b&gclid=1&page=2', 'https://a.com/s?q=a,b&page=2'],
+    ['https://a.com/s?UTM_Source=x&q=1', 'https://a.com/s?q=1'],
+    ['https://a.com/s?utm%5Fsource=x&q=1', 'https://a.com/s?q=1'],
+    ['https://a.com/s?q=1&&', 'https://a.com/s?q=1'],
+    // Hash routes are separate pages of a single-page app; other fragments aren't.
+    ['https://app.com/#/inbox', 'https://app.com/#/inbox'],
+    ['https://app.com/#!/settings?utm_source=x', 'https://app.com/#!/settings?utm_source=x'],
+    ['https://app.com/docs#section-2', 'https://app.com/docs'],
     ['https://example.com/?UTM_SOURCE=a&fbclid=b&gclid=c&msclkid=d&mc_eid=e', 'https://example.com/'],
     ['https://example.com/a/b///#hash', 'https://example.com/a/b'],
     ['https://example.com', 'https://example.com/'],
@@ -190,4 +201,11 @@ it('physically clears every table and rolls back failures', async () => {
   spy.mockRestore();
   await clearAllData();
   for (const table of db.tables) expect(await table.count()).toBe(0);
+});
+
+describe('getPageByUrl for pages that can never be saved', () => {
+  it('returns undefined instead of throwing', async () => {
+    await expect(getPageByUrl('chrome://newtab/')).resolves.toBeUndefined();
+    await expect(getPageByUrl('not a url')).resolves.toBeUndefined();
+  });
 });

@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { SettingsView } from './views/SettingsView';
 import { App } from './App';
+import { getActiveTabRef } from '../shared/tabs';
 import { clearAllData, clearPageNotes } from '../shared/storage';
 import { getPrivacySettings } from '../shared/privacy';
 import { sendToBackground } from '../shared/messages';
@@ -22,6 +23,7 @@ async function click(label: string): Promise<void> {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('chrome', { windows: { getCurrent: async () => ({ id: 42 }) } });
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   vi.mocked(getPrivacySettings).mockResolvedValue(settings);
@@ -40,6 +42,7 @@ it('requires confirmation and cancel preserves data; confirms only the captured 
   expect(clearPageNotes).not.toHaveBeenCalled();
   await click("Clear This Page's Notes"); await click('Clear Notes');
   expect(clearPageNotes).toHaveBeenCalledWith('https://example.com');
+  expect(getActiveTabRef).toHaveBeenCalledWith(42);
   expect(container.textContent).toContain('Page notes and highlights removed.');
 });
 it('confirms all-data deletion and displays failures without false success', async () => {

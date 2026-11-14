@@ -48,7 +48,17 @@ it('rejects content-script preference changes and selected text from blocked ori
   await update('complete');
   const response = await (handlers['toolbar:action'] as MessageHandler<'toolbar:action'>)(
     { action: 'explain', text: 'secret', url: 'https://example.com' },
-    { tab: { url: 'https://chase.com' } as chrome.tabs.Tab },
+    { tab: { id: 1, url: 'https://chase.com' } as chrome.tabs.Tab },
   );
   expect(response.ok).toBe(false);
+});
+
+it('preserves main sender checks alongside privacy checks', async () => {
+  await update('complete');
+  const action = handlers['toolbar:action'] as MessageHandler<'toolbar:action'>;
+  const payload = { action: 'explain' as const, text: 'allowed', url: 'https://example.com' };
+  expect(await action(payload, { tab: { id: 1, url: payload.url } as chrome.tabs.Tab })).toMatchObject({ ok: true });
+  expect(await action(payload, { url: 'chrome-extension://test/sidepanel.html' })).toMatchObject({ ok: false });
+  const context = handlers['tabs:getContext'] as MessageHandler<'tabs:getContext'>;
+  expect(() => context({ tabIds: [1] }, { url: 'https://example.com', tab: { id: 1 } as chrome.tabs.Tab })).toThrow('only answered for extension pages');
 });

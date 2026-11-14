@@ -12,6 +12,7 @@ import { canReadUrl, watchPagePrivacy } from '../shared/privacy';
  * robust W3C anchoring are separate tickets.
  */
 
+import { touchesEditable } from './selection';
 import { installSelectionToolbar } from './toolbar';
 import { registerHandlers, notify } from '../shared/messages';
 import type { PageContext, SelectionInfo } from '../shared/types';
@@ -21,8 +22,6 @@ const LOG = '[smart-tab-notes:content]';
 /** How many characters either side of a highlight we keep for re-anchoring. */
 const CONTEXT_CHARS = 120;
 
-/** Default cap on how much page text we hand back. */
-const DEFAULT_MAX_CHARS = 20_000;
 
 /* ------------------------------------------------------------------ *
  * Reading the page
@@ -48,6 +47,9 @@ function describeSelection(): SelectionInfo | null {
   if (!text) return null;
 
   const range = selection.getRangeAt(0);
+  // Text in inputs and editable regions (email drafts, chat boxes) is the
+  // user's own writing: never report it, matching the toolbar.
+  if (touchesEditable(range)) return null;
   const node = range.commonAncestorContainer;
   const block =
     node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null);
@@ -64,20 +66,8 @@ function describeSelection(): SelectionInfo | null {
   return { text, prefix, suffix, url: location.href, title: document.title };
 }
 
-function readPageContext(includeText: boolean, maxChars: number): PageContext {
-  const context: PageContext = {
-    url: location.href,
-    title: document.title,
-    selection: describeSelection(),
-  };
-
-  if (includeText) {
-    const full = document.body?.innerText ?? '';
-    context.text = full.slice(0, maxChars);
-    context.truncated = full.length > maxChars;
-  }
-
-  return context;
+function readPageContext(): PageContext {
+  return { url: location.href, title: document.title, selection: describeSelection() };
 }
 
 /* ------------------------------------------------------------------ *
@@ -91,9 +81,9 @@ registerHandlers('content', {
   },
   'ping': async () => ({ ok: true, endpoint: 'content', at: Date.now() }),
 
-  'page:getContext': async ({ includeText = false, maxChars = DEFAULT_MAX_CHARS }) => {
+  'page:getContext': async () => {
     if (!await canReadUrl(location.href)) throw new Error('Reading is disabled.');
-    const context = readPageContext(includeText, maxChars);
+    const context = readPageContext();
     if (context.url !== location.href || !await canReadUrl(location.href)) throw new Error('Reading is disabled.');
     return context;
   },
@@ -106,7 +96,8 @@ registerHandlers('content', {
  * ------------------------------------------------------------------ */
 
 let selectionTimer: number | undefined;
-let lastReported: string | null = null;
+/** Text last sent (null = "no selection" was sent); undefined = nothing sent yet. */
+let lastReported: string | null | undefined;
 
 /**
  * `selectionchange` fires on every mouse move during a drag, so wait for
@@ -125,6 +116,15 @@ function onSelectionChange(): void {
 }
 
 document.addEventListener('selectionchange', onSelectionChange);
+
+// The side panel clears its selection whenever the user switches tabs. When
+// this tab comes back into view, report the current selection again, even if
+// it is the same text as last time.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  lastReported = undefined;
+  onSelectionChange();
+});
 
 console.debug(LOG, 'ready');
 

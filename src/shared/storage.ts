@@ -36,7 +36,14 @@ export async function savePage(input: PageInput): Promise<Page> {
 }
 
 export async function getPageByUrl(url: string): Promise<Page | undefined> {
-  const page = await db.pages.where('url').equals(normalizeUrl(url)).first();
+  // chrome://, file:// and other pages can never be saved, so they have no page.
+  let normalized: string;
+  try {
+    normalized = normalizeUrl(url);
+  } catch {
+    return undefined;
+  }
+  const page = await db.pages.where('url').equals(normalized).first();
   return page?.deleted ? undefined : page;
 }
 

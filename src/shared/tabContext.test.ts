@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getTabContext } from './tabContext';
+import { getTabContext, runExtractor } from './tabContext';
 import type { ExtractedPage } from './types';
 
 type FakeTab = Partial<chrome.tabs.Tab> & { id: number };
@@ -99,14 +99,34 @@ describe('getTabContext', () => {
   });
 
   it('reports closed tabs and injection failures as errors instead of throwing', async () => {
-    tabs[2] = tab(2, 'file:///Users/me/notes.html');
-    pageResults[2] = new Error('Cannot access contents of url "file:///Users/me/notes.html".');
+    tabs[2] = tab(2, 'https://example.com/broken');
+    pageResults[2] = new Error('Frame with ID 0 is showing error page');
 
     const [closed, blocked] = await getTabContext([99, 2]);
 
     expect(closed).toMatchObject({ tabId: 99, status: 'error', error: 'No tab with id: 99.' });
     expect(blocked).toMatchObject({ tabId: 2, status: 'error', loaded: true });
-    expect(blocked!.error).toContain('Cannot access');
+    expect(blocked!.error).toContain('error page');
+  });
+
+  it('labels the result with the page actually read if the tab navigated meanwhile', async () => {
+    tabs[1] = tab(1, 'https://example.com/a');
+    pageResults[1] = { contentType: 'text/html', page: { ...article, url: 'https://other.example/b', title: 'Page B' } };
+    executeScript.mockImplementationOnce(async () => {
+      tabs[1] = tab(1, 'https://other.example/b');
+      return [{ result: undefined }];
+    });
+    expect((await getTabContext([1]))[0]).toMatchObject({ status: 'ok', url: 'https://other.example/b', title: 'Page B' });
+
+    tabs[2] = tab(2, 'https://example.com/a');
+    pageResults[2] = { contentType: 'text/html', page: { ...article, url: 'chrome://settings/' } };
+    expect((await getTabContext([2]))[0]).toMatchObject({ status: 'restricted', url: 'chrome://settings/', text: '' });
+  });
+
+  it('reports local files as restricted: the extension has no file:// permission', async () => {
+    tabs[1] = tab(1, 'file:///Users/me/notes.html');
+    expect((await getTabContext([1]))[0]!.status).toBe('restricted');
+    expect(executeScript).not.toHaveBeenCalled();
   });
 
   it('returns results in the order the ids were given', async () => {
@@ -139,4 +159,38 @@ it('gates extraction before onboarding completion', async () => {
   storageGet.mockResolvedValue({});
   expect((await getTabContext([1]))[0]?.status).toBe('restricted');
   expect(executeScript).not.toHaveBeenCalled();
+});
+
+describe('runExtractor (the function injected into the page)', () => {
+  it('returns no page for a PDF without reading page text', async () => {
+    vi.stubGlobal('location', { href: 'https://example.com/a' });
+    vi.stubGlobal('SmartTabNotesExtract', { canReadUrl: async () => true });
+    vi.stubGlobal('document', { contentType: 'application/pdf' });
+    expect(await runExtractor(1000)).toEqual({ contentType: 'application/pdf', page: null });
+  });
+
+  it('fails closed when extract.js did not load', async () => {
+    vi.stubGlobal('location', { href: 'https://example.com/a' });
+    vi.stubGlobal('SmartTabNotesExtract', undefined);
+    vi.stubGlobal('document', { contentType: 'text/html' });
+    await expect(runExtractor(1000)).rejects.toThrow('Reading is disabled.');
+  });
+
+  it('calls the injected extractor with the size cap', async () => {
+    vi.stubGlobal('location', { href: 'https://example.com/a' });
+    const doc = { contentType: 'text/html' };
+    const extractPage = vi.fn(() => article);
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('SmartTabNotesExtract', { extractPage, canReadUrl: async () => true });
+    expect(await runExtractor(1234)).toEqual({ contentType: 'text/html', page: article });
+    expect(extractPage).toHaveBeenCalledWith(doc, { maxChars: 1234 });
+  });
+});
+
+it('checks privacy in the injected reader before calling the extractor', async () => {
+  const extractPage = vi.fn(() => article);
+  vi.stubGlobal('location', { href: 'https://chase.com' });
+  vi.stubGlobal('SmartTabNotesExtract', { extractPage, canReadUrl: async () => false });
+  await expect(runExtractor(1000)).rejects.toThrow('Reading is disabled.');
+  expect(extractPage).not.toHaveBeenCalled();
 });

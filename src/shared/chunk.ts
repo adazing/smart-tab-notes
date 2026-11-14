@@ -29,7 +29,10 @@ export function estimateTokens(text: string): number {
 export function splitLongText(text: string, maxChars: number): string[] {
   if (text.length <= maxChars) return [text];
 
-  const sentences = text.match(/[^.!?]+(?:[.!?]+["')\]]*\s*|$)/g) ?? [text];
+  // Every character lands in exactly one piece: a run ending in sentence
+  // punctuation (which may itself start with punctuation, as in ".NET"), or
+  // the unpunctuated tail.
+  const sentences = text.match(/[^.!?]*[.!?]+["')\]]*\s*|[^.!?]+$/g) ?? [text];
   const pieces: string[] = [];
   let current = '';
 
@@ -59,6 +62,15 @@ export function splitLongText(text: string, maxChars: number): string[] {
   return pieces;
 }
 
+const MAX_LABEL_HEADINGS = 3;
+
+function joinHeadings(label: string, heading: string): string {
+  if (!label) return heading;
+  const parts = label.split(' · ');
+  if (parts.at(-1) === '…' || parts.includes(heading)) return label;
+  return parts.length >= MAX_LABEL_HEADINGS ? `${label} · …` : `${label} · ${heading}`;
+}
+
 export function chunkBlocks(
   blocks: TextBlock[],
   tabId: number,
@@ -73,6 +85,7 @@ export function chunkBlocks(
   let chunkHeading = '';
   let parts: string[] = [];
   let size = 0; // characters in `parts`, including separators
+  let hasText = false; // `parts` holds more than headings
 
   const flush = (): void => {
     if (parts.length === 0) return;
@@ -87,6 +100,7 @@ export function chunkBlocks(
     });
     parts = [];
     size = 0;
+    hasText = false;
   };
 
   for (const block of blocks) {
@@ -96,21 +110,25 @@ export function chunkBlocks(
     if (block.kind === 'heading') {
       if (size / CHARS_PER_TOKEN >= minTokens) flush();
       heading = text;
-      // A heading at the very start of a chunk labels it; keep it in the text too.
+      // A heading at the very start of a chunk labels it. A small section merged
+      // into the current chunk adds its heading to the label (up to three).
       if (parts.length === 0) chunkHeading = heading;
+      else chunkHeading = joinHeadings(chunkHeading, heading);
       parts.push(text);
       size += text.length + 2;
       continue;
     }
 
     for (const piece of splitLongText(text, maxChars)) {
-      if (size > 0 && size + piece.length > maxChars) {
+      // Never flush a chunk that holds only a heading: keep it with its text.
+      if (hasText && size + piece.length > maxChars) {
         flush();
         chunkHeading = heading;
       }
       if (parts.length === 0) chunkHeading = heading;
       parts.push(piece);
       size += piece.length + 2;
+      hasText = true;
     }
   }
   flush();

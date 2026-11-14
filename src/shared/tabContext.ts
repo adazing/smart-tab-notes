@@ -57,7 +57,7 @@ interface InjectedResult {
 }
 
 /** Runs in the page, after extract.js has defined the global. */
-async function runExtractor(maxChars: number): Promise<InjectedResult> {
+export async function runExtractor(maxChars: number): Promise<InjectedResult> {
   const apiPrivacy = (globalThis as unknown as { SmartTabNotesExtract?: { canReadUrl: (url: string) => Promise<boolean> } }).SmartTabNotesExtract;
   if (!apiPrivacy || !await apiPrivacy.canReadUrl(location.href)) throw new Error('Reading is disabled.');
   const contentType = document.contentType;
@@ -103,9 +103,16 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
     if (!result) return empty(base, 'error', 'No result from the page');
     if (!result.page) return empty(base, 'pdf');
 
-    const current = await chrome.tabs.get(tabId);
-    if (current.url !== url || !await canReadUrl(url) || !await canReadUrl(result.page.url)) return empty(base, 'restricted');
     const { page } = result;
+    // The tab can navigate between tabs.get and the injection. Label the
+    // result with the page that was actually read, and re-check it may be.
+    if (page.url && page.url !== url) {
+      base.url = page.url;
+      base.title = page.title;
+      if (!isAccessible(page.url)) return empty(base, 'restricted');
+    }
+    const current = await chrome.tabs.get(tabId);
+    if (current.url !== base.url || !await canReadUrl(url) || !await canReadUrl(base.url)) return empty(base, 'restricted');
     return {
       ...base,
       title: base.title || page.title,
@@ -117,8 +124,7 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
       truncated: page.truncated,
     };
   } catch (error) {
-    // e.g. file:// without "Allow access to file URLs", an error page, or a
-    // tab that navigated away mid-injection.
+    // e.g. Chrome's error page, or a tab that navigated away mid-injection.
     return empty(base, 'error', describe(error));
   }
 }

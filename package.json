@@ -13,7 +13,7 @@
     "verify": "node scripts/verify-dist.mjs",
     "test": "vitest run",
     "test:toolbar": "vitest run src/content",
-    "test:browser": "playwright test",
+    "test:browser": "npm run build && playwright test",
     "test:sites": "vite-node scripts/site-check.ts",
     "test:storage": "vitest run src/shared"
   },
@@ -24,7 +24,7 @@
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "1.65.0",
     "@types/chrome": "0.0.270",
     "@types/jsdom": "21.1.7",
     "@types/node": "22.9.0",
@@ -32,10 +32,10 @@
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.7.0",
     "fake-indexeddb": "6.2.7",
-    "jsdom": "^26.1.0",
+    "jsdom": "26.1.0",
     "typescript": "5.6.3",
     "vite": "6.4.5",
     "vite-node": "3.2.4",
-    "vitest": "^4.1.12"
+    "vitest": "4.1.12"
   }
 }

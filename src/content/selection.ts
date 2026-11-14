@@ -4,11 +4,23 @@ export interface SelectionSnapshot {
   range: Range;
 }
 
-function excluded(node: Node, host: HTMLElement): boolean {
+const EDITABLE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
+function insideEditable(node: Node): boolean {
   const element = node instanceof Element ? node : node.parentElement;
-  return node.getRootNode() === host.shadowRoot || !!element?.closest(
-    'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-smart-tab-notes]',
-  );
+  return !!element?.closest(`${EDITABLE}, [data-smart-tab-notes]`);
+}
+
+/**
+ * True when a range starts, ends or passes through an editable control (an
+ * input, a textarea, a select, or a contenteditable region such as an email
+ * draft). Text there is the user's own writing, so it is never shown or sent.
+ */
+export function touchesEditable(range: Range): boolean {
+  if (insideEditable(range.startContainer) || insideEditable(range.endContainer)) return true;
+  const ancestor = range.commonAncestorContainer;
+  if (!(ancestor instanceof Element)) return false;
+  return [...ancestor.querySelectorAll(EDITABLE)].some((control) => range.intersectsNode(control));
 }
 
 export function captureSelection(host: HTMLElement): SelectionSnapshot | undefined {
@@ -16,13 +28,7 @@ export function captureSelection(host: HTMLElement): SelectionSnapshot | undefin
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
   const range = selection.getRangeAt(0);
   const text = selection.toString();
-  if (!text.trim() || excluded(range.startContainer, host) || excluded(range.endContainer, host)) return;
-  // Reject ranges crossing editable controls, even if neither endpoint is inside one.
-  const ancestor = range.commonAncestorContainer;
-  if (ancestor instanceof Element) {
-    const controls = ancestor.querySelectorAll('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
-    if ([...controls].some(control => range.intersectsNode(control))) return;
-  }
+  if (!text.trim() || range.startContainer.getRootNode() === host.shadowRoot || touchesEditable(range)) return;
   return { text, url: location.href, range: range.cloneRange() };
 }
 

@@ -47,17 +47,10 @@ export interface TabGroupRef {
   tabIds: number[];
 }
 
-/**
- * What a content script can tell us about the page it runs in.
- * `text` is only filled in when the caller asks for it.
- */
+/** What a content script can tell us about the page it runs in. */
 export interface PageContext {
   url: string;
   title: string;
-  /** Text content of the page body, truncated to the requested length. */
-  text?: string;
-  /** True when the body text was cut short. */
-  truncated?: boolean;
   /** The user's current selection, if any. */
   selection: SelectionInfo | null;
 }

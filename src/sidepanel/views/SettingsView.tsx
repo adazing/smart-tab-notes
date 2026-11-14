@@ -25,7 +25,8 @@ export function SettingsView({ settings, onPrivacy }: { settings: PrivacySetting
     setStatus('Blocked sites saved.');
   }
   async function confirmPage(): Promise<void> {
-    const tab = await getActiveTabRef();
+    const window = await chrome.windows.getCurrent();
+    const tab = await getActiveTabRef(window.id);
     if (!tab) throw new Error('No active page is available.');
     setConfirmation({ kind: 'page', url: normalizeUrl(tab.url) });
   }

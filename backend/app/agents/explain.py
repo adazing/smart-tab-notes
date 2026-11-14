@@ -46,25 +46,52 @@ def truncate_tokens(text: str, budget: int) -> str:
     return text[: budget * 4]
 
 
+def find_selection(text: str, selection: str) -> tuple[int, int] | None:
+    """Where `selection` occurs in `text`, ignoring case and whitespace differences.
+
+    A selection spanning paragraphs arrives with newlines while the page text
+    may join them differently, so match word by word with any whitespace in
+    between. Long selections are matched on their first 40 words.
+    """
+    words = selection.split()
+    if not words:
+        return None
+    for probe in (words[:40], words[:8]):
+        pattern = r"\s+".join(re.escape(word) for word in probe)
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            end = match.end() if len(probe) == len(words) else min(len(text), match.start() + len(selection))
+            return match.start(), end
+    return None
+
+
 def window_around(text: str, selection: str, budget: int) -> str:
-    """Trim `text` to ~`budget` tokens centred on the first occurrence of `selection`."""
+    """Trim `text` to at most `budget` tokens, centred on `selection`."""
     if count_tokens(text) <= budget:
         return text
-    idx = text.find(selection)
-    if idx < 0:
-        idx = text.lower().find(selection.lower())
-    if idx < 0:
+    span = find_selection(text, selection)
+    if span is None:
         return truncate_tokens(text, budget)
+    sel_start, sel_end = span
+    if count_tokens(text[sel_start:sel_end]) >= budget:
+        return "…" + truncate_tokens(text[sel_start:], budget) + "…"
 
-    # Pick a character window centred on the selection, sized from the text's
-    # actual chars-per-token ratio so it lands close to the token budget.
-    chars_per_token = len(text) / max(1, count_tokens(text))
-    chars = max(len(selection), int(budget * chars_per_token))
-    centre = idx + len(selection) // 2
-    start = max(0, centre - chars // 2)
-    end = min(len(text), start + chars)
-    start = max(0, end - chars)
-    snippet = text[start:end]
+    # Start from the page's average chars-per-token, then shrink until the
+    # window really fits: token density varies (code, CJK, URLs).
+    chars = int(budget * len(text) / max(1, count_tokens(text)))
+    centre = (sel_start + sel_end) // 2
+    for _ in range(6):
+        chars = max(chars, sel_end - sel_start)
+        start = max(0, min(sel_start, centre - chars // 2))
+        end = min(len(text), max(sel_end, start + chars))
+        start = max(0, min(start, end - chars))
+        snippet = text[start:end]
+        used = count_tokens(snippet)
+        if used <= budget:
+            break
+        chars = int(chars * budget / used * 0.95)
+    else:
+        snippet = truncate_tokens(snippet, budget)
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(text) else ""
     return f"{prefix}{snippet}{suffix}"
@@ -137,34 +164,39 @@ that only use the current page."""
 
 
 def build_messages(state: ExplainState) -> list[BaseMessage]:
+    selected = truncate_tokens(state["selected_text"], get_settings().selection_token_budget)
     parts = [
-        f"Highlighted text:\n\"\"\"{state['selected_text']}\"\"\"",
+        f"Highlighted text:\n\"\"\"{selected}\"\"\"",
         f"Current page (around the highlight):\n\"\"\"{state.get('page_context') or '(none)'}\"\"\"",
     ]
     if state.get("tab_contexts"):
         tabs = "\n\n".join(
-            f"[tab:{t['tab_id']}] {t['title']} ({t['url']})\n{t['text']}" for t in state["tab_contexts"]
+            f"[tab:{t['tab_id']}] {t['title'][:200]} ({t['url'][:300]})\n{t['text']}" for t in state["tab_contexts"]
         )
         parts.append(f"Other open tabs:\n{tabs}")
     return [SystemMessage(SYSTEM_PROMPT), HumanMessage("\n\n".join(parts))]
 
 
 def call_llm(messages: list[BaseMessage]) -> str:
-    """Single seam for the model call so tests can mock it."""
-    from langchain_openai import ChatOpenAI
+    """Single seam for the model call so tests can mock it. Logs tokens used."""
+    from app import llm
 
-    settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set. Add it to backend/.env.")
-    llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key, temperature=0.2)
-    return str(llm.invoke(messages).content)
+    usage = llm.Usage()
+    try:
+        return llm.complete(messages, usage)
+    finally:
+        usage.log("/explain")  # also when the call fails
 
 
 def llm_node(state: ExplainState) -> ExplainState:
     return {"raw_answer": call_llm(build_messages(state))}
 
 
-_TAB_MARKER = re.compile(r"\s*\[tab:\s*(\d+)\s*\]")
+# [tab:7], plus the variants models drift into: [Tab 7], [tab:7, tab:8], [tabs: 7, 8].
+_TAB_MARKER = re.compile(
+    r"\s*\[\s*tabs?\s*[:#]?\s*(\d+(?:(?:\s*[,;&]\s*(?:and\s+)?|\s+and\s+)(?:tabs?\s*[:#]?\s*)?\d+)*)\s*\]",
+    re.IGNORECASE,
+)
 
 
 def cite_node(state: ExplainState) -> ExplainState:
@@ -172,9 +204,10 @@ def cite_node(state: ExplainState) -> ExplainState:
     allowed = {t["tab_id"] for t in state.get("tab_contexts", [])}
     used: list[int] = []
     for match in _TAB_MARKER.finditer(raw):
-        tab_id = int(match.group(1))
-        if tab_id in allowed and tab_id not in used:
-            used.append(tab_id)
+        for number in re.findall(r"\d+", match.group(1)):
+            tab_id = int(number)
+            if tab_id in allowed and tab_id not in used:
+                used.append(tab_id)
     explanation = re.sub(r"\s+([.,;:!?])", r"\1", _TAB_MARKER.sub("", raw)).strip()
     return {"explanation": explanation, "used_tab_ids": used}
 

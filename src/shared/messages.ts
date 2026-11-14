@@ -34,6 +34,7 @@ import type {
   TabRef,
   ToolbarAction,
 } from './types';
+import { isFromExtensionPage } from './senders';
 
 /** The three places a message can be sent to. */
 export type Endpoint = 'background' | 'sidepanel' | 'content';
@@ -79,8 +80,12 @@ export interface MessageContracts {
   };
 
   /** The tab the user is looking at right now. */
+  /**
+   * The active tab of one window. Side panels pass their own `windowId`;
+   * without it, the last focused window is used.
+   */
   'tabs:getActive': {
-    request: Empty;
+    request: { windowId?: number };
     response: { tab: TabRef | null };
   };
 
@@ -92,13 +97,18 @@ export interface MessageContracts {
 
   /** Sent by the background worker when the user switches or updates tabs. */
   'tabs:changed': {
-    request: { activeTabId: number | null };
+    /** Every open side panel receives this; ignore it unless `windowId` is yours. */
+    request: { activeTabId: number | null; windowId: number };
     response: Ack;
   };
 
-  /** Ask a content script what is on its page. */
+  /**
+   * Ask a content script for its page's URL, title and selection. For page
+   * text use `tabs:getContext`, the one read path (Readability, hidden text
+   * removed, editable fields never read).
+   */
   'page:getContext': {
-    request: { includeText?: boolean; maxChars?: number };
+    request: Empty;
     response: PageContext;
   };
 
@@ -110,7 +120,11 @@ export interface MessageContracts {
 
   /** Fired by a content script after the user selects or clears text. */
   'page:selectionChanged': {
-    request: { selection: SelectionInfo | null; tabId?: number };
+    /**
+     * The worker stamps `tabId` and `windowId` before relaying to side panels.
+     * Panels should ignore selections from tabs other than the one they show.
+     */
+    request: { selection: SelectionInfo | null; tabId?: number; windowId?: number };
     response: Ack;
   };
 
@@ -187,7 +201,9 @@ export function isNoReceiverError(error: string): boolean {
   return (
     error.includes('Receiving end does not exist') ||
     error.includes('Could not establish connection') ||
-    error.includes('message port closed')
+    error.includes('message port closed') ||
+    // A content script left over after the extension reloaded.
+    error.includes('Extension context invalidated')
   );
 }
 
@@ -279,6 +295,10 @@ export function onMessage<K extends MessageKind>(
   ): boolean => {
     if (!isEnvelope(message)) return false;
     if (message.target !== endpoint || message.kind !== kind) return false;
+    // runtime.sendMessage reaches every extension page, so a content script
+    // could post straight to the side panel and skip the background's checks.
+    // Panels only listen to the extension itself.
+    if (endpoint === 'sidepanel' && !isFromExtensionPage(sender, chrome.runtime.getURL(''))) return false;
 
     void Promise.resolve(handler(message.payload as RequestOf<K>, sender))
       .then(sendResponse)

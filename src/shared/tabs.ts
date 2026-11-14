@@ -14,7 +14,8 @@ const LOG = '[smart-tab-notes:tabs]';
 /** Pages we are not allowed to inject into, so there is no content script. */
 export function isAccessible(url: string | undefined): boolean {
   if (!url) return false;
-  if (!/^(https?|file):/.test(url)) return false;
+  // file:// pages need host permission the manifest does not request.
+  if (!/^https?:/.test(url)) return false;
   // Chrome blocks extensions on its own web properties.
   if (url.startsWith('https://chrome.google.com/webstore')) return false;
   if (url.startsWith('https://chromewebstore.google.com')) return false;
@@ -93,7 +94,10 @@ export async function listTabGroups(tabs: TabRef[]): Promise<TabGroupRef[]> {
   }
 }
 
-export async function getActiveTabRef(): Promise<TabRef | null> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+/** The active tab of `windowId`, or of the last focused window when omitted. */
+export async function getActiveTabRef(windowId?: number): Promise<TabRef | null> {
+  const query: chrome.tabs.QueryInfo =
+    windowId === undefined ? { active: true, lastFocusedWindow: true } : { active: true, windowId };
+  const [tab] = await chrome.tabs.query(query);
   return tab ? toTabRef(tab) : null;
 }
