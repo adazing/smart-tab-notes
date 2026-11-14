@@ -1,18 +1,19 @@
-# Secrets
+node_modules/
+dist/
+*.zip
+.DS_Store
 .env
+.env.local
+*.tsbuildinfo
+test-results/
+playwright-report/
+coverage/
 .env.*
 !.env.example
 
-# Python
+# Python backend
 __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
 *.egg-info/
-
-# Node / extension
-node_modules/
-dist/
-
-# OS
-.DS_Store

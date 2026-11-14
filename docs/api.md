@@ -2,7 +2,7 @@
 
 Base URL (local dev): `http://localhost:8000`
 
-All bodies are JSON. CORS allows any `chrome-extension://` origin, plus any origins listed in `ALLOWED_ORIGINS` in `backend/.env`.
+All bodies are JSON. CORS allows the extension ids listed in `EXTENSION_IDS` in `backend/.env` (find yours at `chrome://extensions`), plus any origins in `ALLOWED_ORIGINS`. While `EXTENSION_IDS` is empty, any Chrome extension is allowed and the server logs a warning: fine for local development, not for a deployed backend.
 
 ## GET /health
 
@@ -22,18 +22,18 @@ Explains a highlighted passage in plain language (2 to 4 sentences), using the c
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `selected_text` | string | yes | The highlighted text. Must not be empty. |
-| `page_text` | string | no | Readable text of the current page. The backend trims it to a window around the selection. |
-| `other_tabs` | array of Tab | no | Other open tabs. Tabs with empty `text` are ignored. |
+| `selected_text` | string | yes | The highlighted text. 1 to 20,000 characters. Matched in the page ignoring case and whitespace, so a selection across paragraphs is found. Only the first ~600 tokens are sent to the model. |
+| `page_text` | string | no | Readable text of the current page, up to 1,000,000 characters. The backend trims it to a window of at most 1,500 tokens around the selection. |
+| `other_tabs` | array of Tab | no | Up to 20 other open tabs. Tabs with empty `text` are ignored. |
 
 **Tab**
 
 | Field | Type | Notes |
 |---|---|---|
 | `tab_id` | integer | Chrome tab id |
-| `title` | string | |
-| `url` | string | |
-| `text` | string | Readable text of the tab. The backend keeps the most relevant tabs and trims each to fit a token budget. |
+| `title` | string | Up to 1,000 characters. |
+| `url` | string | Up to 4,096 characters. |
+| `text` | string | Up to 300,000 characters. Readable text of the tab. The backend keeps the most relevant tabs and trims each to fit a token budget. |
 
 ```json
 {
@@ -63,9 +63,9 @@ Explains a highlighted passage in plain language (2 to 4 sentences), using the c
 
 | Status | When | Body |
 |---|---|---|
-| 422 | Invalid body (for example, missing or empty `selected_text`) | FastAPI validation error |
+| 422 | Invalid body: missing or empty `selected_text`, or any field over its size limit | FastAPI validation error |
 | 503 | Backend has no OpenAI key configured | `{ "detail": "OPENAI_API_KEY is not set. Add it to backend/.env." }` |
-| 502 | The LLM call failed | `{ "detail": "The explanation service failed. Try again." }` |
+| 502 | The LLM call or anything else on the server failed | `{ "detail": "The explanation service failed. Try again." }` |
 
 **Example**
 
@@ -83,8 +83,8 @@ Answers a question using only the tabs the user picked, citing the chunk each po
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `messages` | array of Message | yes | The conversation so far, oldest first. The last one must be from the user. The last 10 are sent to the model. |
-| `tabs` | array of ChatTab | yes | 1 to 20 tabs the user chose. |
+| `messages` | array of Message | yes | The conversation so far, oldest first, at most 50, each up to 20,000 characters. The last one must be from the user. The last 10 are sent to the model, trimmed. |
+| `tabs` | array of ChatTab | yes | 1 to 20 tabs the user chose; at most 1,500 chunks and 3,000,000 characters of chunk text in total. |
 
 **Message**: `{ "role": "user" \| "assistant", "content": string }`
 
@@ -95,7 +95,7 @@ Answers a question using only the tabs the user picked, citing the chunk each po
 | `tab_id` | integer | Chrome tab id |
 | `title` | string | |
 | `url` | string | |
-| `chunks` | array of `{ id, heading, text }` | At least one. Exactly the `chunks` from the extension's `getTabContext` (`id` and `heading` and `text` of each `TextChunk`). `id` must match `[A-Za-z0-9_.:-]{1,64}` and be unique across all tabs, which `t<tabId>-c<n>` ids are. |
+| `chunks` | array of `{ id, heading, text }` | At least one. Exactly the `chunks` from the extension's `getTabContext` (`id` and `heading` and `text` of each `TextChunk`). `id` must match `[A-Za-z0-9_.:-]{1,64}` and be unique across all tabs, which `t<tabId>-c<n>` ids are. Chunk `text` up to 10,000 characters. |
 
 ```json
 {
@@ -151,7 +151,7 @@ data: {"answer": "…", "citations": [...], "used_tab_ids": [101], "covered": tr
 
 | Status | When |
 |---|---|
-| 422 | Invalid body: no messages, last message not from the user, no tabs, a tab with no chunks, a bad or duplicate chunk id. |
+| 422 | Invalid body: no messages, last message not from the user, no tabs, a tab with no chunks, a bad or duplicate chunk id, or anything over its size limit. |
 | 503 | Backend has no OpenAI key configured. |
 
 **Example**
@@ -169,8 +169,8 @@ Scores how relevant each open tab is to a question, so the side panel can sugges
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `question` | string | yes | The question being typed. |
-| `tabs` | array of `{ tab_id, title, url, snippet }` | yes | 1 to 100 tabs. `snippet` is any short text from the tab, such as its first chunk; title and snippet are scored together. |
+| `question` | string | yes | The question being typed, up to 2,000 characters. |
+| `tabs` | array of `{ tab_id, title, url, snippet }` | yes | 1 to 100 tabs. `snippet` (up to 4,000 characters) is any short text from the tab, such as its first chunk; title and snippet are scored together. |
 
 **Response 200**
 
@@ -190,7 +190,7 @@ Scores how relevant each open tab is to a question, so the side panel can sugges
 | `score` | Cosine similarity between the question and the tab, roughly 0 to 1. |
 | `suggested` | `score >= RANK_SUGGEST_THRESHOLD` (default 0.3). The panel should still include the current tab by default and let the user confirm. The threshold has not been calibrated against real questions yet. |
 
-**Errors**: 422 invalid body, 503 no OpenAI key, 502 the embedding call failed.
+**Errors**: 422 invalid body or over a size limit, 503 no OpenAI key, 502 the embedding call failed.
 
 ## Token logging
 

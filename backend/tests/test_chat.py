@@ -195,6 +195,13 @@ def test_model_failure_mid_stream_sends_an_error_event(monkeypatch):
         {"messages": [], "tabs": TABS},
         {"messages": [{"role": "user", "content": "hi"}], "tabs": [TABS[0], TABS[0]]},  # duplicate chunk ids
         {"messages": [{"role": "user", "content": "hi"}], "tabs": [{**TABS[0], "chunks": [{"id": "bad id!", "text": "x"}]}]},
+        {"messages": [{"role": "user", "content": "x" * 20_001}], "tabs": TABS},
+        {"messages": [{"role": "user", "content": "hi"}] * 51, "tabs": TABS},
+        {"messages": [{"role": "user", "content": "hi"}], "tabs": [{**TABS[0], "chunks": [{"id": "c", "text": "x" * 10_001}]}]},
+        {  # too many chunks in total
+            "messages": [{"role": "user", "content": "hi"}],
+            "tabs": [{"tab_id": t, "chunks": [{"id": f"t{t}-c{i}", "text": "x"} for i in range(100)]} for t in range(16)],
+        },
     ],
 )
 def test_rejects_bad_requests(body):
@@ -203,11 +210,13 @@ def test_rejects_bad_requests(body):
 
 def test_missing_key_is_503_before_streaming(monkeypatch):
     def no_key():
-        raise RuntimeError("OPENAI_API_KEY is not set. Add it to backend/.env.")
+        raise llm.MissingAPIKeyError("OPENAI_API_KEY is not set. Add it to backend/.env.")
 
     monkeypatch.setattr(llm, "require_key", no_key)
     response = client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}], "tabs": TABS})
     assert response.status_code == 503
+    rank = client.post("/rank-tabs", json={"question": "q", "tabs": [{"tab_id": 1, "snippet": "x"}]})
+    assert rank.status_code == 503
 
 
 def test_rank_tabs_scores_every_tab_highest_first():
@@ -228,3 +237,18 @@ def test_rank_tabs_scores_every_tab_highest_first():
     assert scores[0]["score"] > scores[1]["score"] > scores[2]["score"]
     assert scores[0]["suggested"] is True
     assert scores[2]["suggested"] is False
+
+
+def test_rank_tabs_rejects_oversized_requests():
+    assert client.post("/rank-tabs", json={"question": "q" * 2_001, "tabs": [{"tab_id": 1}]}).status_code == 422
+    assert client.post("/rank-tabs", json={"question": "q", "tabs": [{"tab_id": 1, "snippet": "s" * 4_001}]}).status_code == 422
+
+
+def test_long_history_is_trimmed_before_it_reaches_the_model(monkeypatch):
+    from app.agents.explain import count_tokens
+
+    messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": "word " * 4000} for i in range(9)]
+    _, fake = chat("Short answer [t7-c0].", messages=messages, monkeypatch=monkeypatch)
+    prompt = fake.prompts[0]
+    assert all(count_tokens(m.content) <= 1_000 for m in prompt[1:])
+    assert count_tokens(prompt[-1].content) > 400  # the question itself keeps more room

@@ -46,10 +46,14 @@ class Usage:
         logger.info("%s tokens: %s", endpoint, details)
 
 
+class MissingAPIKeyError(RuntimeError):
+    """The backend has no OpenAI key configured (returned as 503)."""
+
+
 def require_key() -> str:
     key = get_settings().openai_api_key
     if not key:
-        raise RuntimeError("OPENAI_API_KEY is not set. Add it to backend/.env.")
+        raise MissingAPIKeyError("OPENAI_API_KEY is not set. Add it to backend/.env.")
     return key
 
 

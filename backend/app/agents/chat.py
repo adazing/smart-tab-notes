@@ -23,7 +23,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app import llm
-from app.agents.explain import count_tokens
+from app.agents.explain import count_tokens, truncate_tokens
 from app.config import get_settings
 
 
@@ -125,15 +125,18 @@ and then, in one sentence, what they do cover. Cite nothing in that case.
 
 def build_messages(state: ChatState) -> list[BaseMessage]:
     sources = "\n\n---\n\n".join(
-        f"[{s['chunk_id']}] Tab {s['tab_id']}: {s['title']}"
-        + (f" — {s['heading']}" if s["heading"] else "")
+        f"[{s['chunk_id']}] Tab {s['tab_id']}: {s['title'][:200]}"
+        + (f" — {s['heading'][:200]}" if s["heading"] else "")
         + f"\n{s['text']}"
         for s in state["sources"]
     )
+    # Older turns are trimmed harder than the question being asked.
     history: list[BaseMessage] = []
-    for message in state["messages"][-get_settings().chat_history_messages :]:
+    recent = state["messages"][-get_settings().chat_history_messages :]
+    for i, message in enumerate(recent):
+        budget = 1_000 if i == len(recent) - 1 else 400
         cls = HumanMessage if message["role"] == "user" else AIMessage
-        history.append(cls(message["content"]))
+        history.append(cls(truncate_tokens(message["content"], budget)))
     return [SystemMessage(f"{SYSTEM_PROMPT}\n\nSources:\n\n{sources}"), *history]
 
 

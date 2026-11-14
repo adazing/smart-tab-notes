@@ -3,17 +3,19 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+# Size caps keep a buggy or hostile client from sending enormous prompts. Text
+# is still trimmed to token budgets before it reaches the model.
 class TabInput(BaseModel):
     tab_id: int
-    title: str = ""
-    url: str = ""
-    text: str = ""
+    title: str = Field(default="", max_length=1_000)
+    url: str = Field(default="", max_length=4_096)
+    text: str = Field(default="", max_length=300_000)
 
 
 class ExplainRequest(BaseModel):
-    selected_text: str = Field(min_length=1)
-    page_text: str = ""
-    other_tabs: list[TabInput] = Field(default_factory=list)
+    selected_text: str = Field(min_length=1, max_length=20_000)
+    page_text: str = Field(default="", max_length=1_000_000)
+    other_tabs: list[TabInput] = Field(default_factory=list, max_length=20)
 
 
 class ExplainResponse(BaseModel):
@@ -28,28 +30,32 @@ class ExplainResponse(BaseModel):
 CHUNK_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,64}$"
 
 
+MAX_CHUNKS = 1_500
+MAX_CHUNK_CHARS_TOTAL = 3_000_000
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=20_000)
 
 
 class ChunkInput(BaseModel):
     """One chunk from the extension's getTabContext (TextChunk)."""
 
     id: str = Field(pattern=CHUNK_ID_PATTERN)
-    heading: str = ""
-    text: str = Field(min_length=1)
+    heading: str = Field(default="", max_length=500)
+    text: str = Field(min_length=1, max_length=10_000)
 
 
 class ChatTab(BaseModel):
     tab_id: int
-    title: str = ""
-    url: str = ""
+    title: str = Field(default="", max_length=1_000)
+    url: str = Field(default="", max_length=4_096)
     chunks: list[ChunkInput] = Field(min_length=1)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1)
+    messages: list[ChatMessage] = Field(min_length=1, max_length=50)
     tabs: list[ChatTab] = Field(min_length=1, max_length=20)
 
     @field_validator("messages")
@@ -65,6 +71,10 @@ class ChatRequest(BaseModel):
         ids = [c.id for t in tabs for c in t.chunks]
         if len(ids) != len(set(ids)):
             raise ValueError("chunk ids must be unique across tabs")
+        if len(ids) > MAX_CHUNKS:
+            raise ValueError(f"at most {MAX_CHUNKS} chunks across all tabs")
+        if sum(len(c.text) for t in tabs for c in t.chunks) > MAX_CHUNK_CHARS_TOTAL:
+            raise ValueError(f"at most {MAX_CHUNK_CHARS_TOTAL:,} characters of chunk text in total")
         return tabs
 
 
@@ -86,13 +96,13 @@ class Citation(BaseModel):
 
 class TabSnippet(BaseModel):
     tab_id: int
-    title: str = ""
-    url: str = ""
-    snippet: str = ""
+    title: str = Field(default="", max_length=1_000)
+    url: str = Field(default="", max_length=4_096)
+    snippet: str = Field(default="", max_length=4_000)
 
 
 class RankTabsRequest(BaseModel):
-    question: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=2_000)
     tabs: list[TabSnippet] = Field(min_length=1, max_length=100)
 
 
