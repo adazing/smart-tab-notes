@@ -10,6 +10,9 @@ test.beforeAll(async () => {
   const extension = resolve('dist');
   context = await chromium.launchPersistentContext(profile, {
     channel: 'chromium', headless: true,
+    // Playwright's default args include --disable-extensions, which cancels
+    // --load-extension and leaves a browser with no extension in it.
+    ignoreDefaultArgs: ['--disable-extensions', '--disable-component-extensions-with-background-pages'],
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
   });
   if (!context.serviceWorkers().length) await context.waitForEvent('serviceworker');
@@ -69,14 +72,23 @@ test('actual extension: actions, selection snapshots, isolation, edges, and dism
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
   await panel.getByLabel('Question about this text').press('Enter');
   await expect(panel.getByRole('status')).toContainText('Demo: question received');
+  // Highlight and Note save through the annotation layer, which wraps the
+  // text in spans and opens the note card. Anchoring itself is covered by
+  // anchoring.spec.ts; here we only check the toolbar hands over cleanly.
+  const text = await page.locator('#text').innerText();
   await panel.getByRole('button', { name: 'Highlight', exact: true }).click();
-  await expect(page.locator('#smart-tab-notes-selection-toolbar .highlight').first()).toBeVisible();
-  expect(await page.locator('#text').innerHTML()).toBe(before);
-  await panel.getByRole('button', { name: 'Note', exact: true }).click();
-  await panel.getByLabel('Note about this text').fill('A temporary note');
-  await panel.getByRole('button', { name: 'Save temporarily' }).click();
-  await expect(panel.getByRole('status')).toContainText('has not been saved to storage');
+  await expect(page.locator('#smart-tab-notes-annotations .card')).toBeVisible();
+  await expect(page.locator('[data-smart-tab-notes-highlight]').first()).toBeVisible();
+  await expect(panel).toBeHidden();
+  expect(await page.locator('#text').innerText()).toBe(text);
+  expect(await page.locator('#text').innerHTML()).not.toBe(before);
+  expect(await page.locator('#text a').getAttribute('href')).toBe('/next');
   await page.keyboard.press('Escape');
+  await select(page, '#other');
+  await panel.getByRole('button', { name: 'Note', exact: true }).click();
+  await panel.getByLabel('Note about this text').fill('A saved note');
+  await panel.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.locator('#smart-tab-notes-annotations .card')).toContainText('A saved note');
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   await select(page, '#other');
@@ -126,12 +138,14 @@ for (const [name, url, selector] of websites) {
       await panel.getByLabel('Question about this text').press('Enter');
       await expect(panel.getByRole('status')).toContainText('Demo: question received');
       await panel.getByRole('button', { name: 'Highlight', exact: true }).click();
-      await expect(page.locator('#smart-tab-notes-selection-toolbar .highlight').first()).toBeVisible();
+      await expect(page.locator('[data-smart-tab-notes-highlight]').first()).toBeVisible();
+      await expect(page.locator('#smart-tab-notes-annotations .card')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await select(page, selector);
       await panel.getByRole('button', { name: 'Note', exact: true }).click();
       await panel.getByLabel('Note about this text').fill('Site test note');
-      await panel.getByRole('button', { name: 'Save temporarily' }).click();
-      await expect(panel.getByRole('status')).toContainText('has not been saved');
-      await page.keyboard.press('Escape');
+      await panel.getByRole('button', { name: 'Save note' }).click();
+      await expect(page.locator('#smart-tab-notes-annotations .card')).toContainText('Site test note');
       await page.keyboard.press('Escape');
       await expect(panel).toBeHidden();
     } finally { await page.close(); }

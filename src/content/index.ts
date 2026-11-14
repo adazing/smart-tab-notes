@@ -6,32 +6,32 @@
  * the user has deliberately selected. That matches the PRD decision that
  * tabs are never read silently.
  *
- * The selection toolbar is installed below. Persistent annotations and
- * robust W3C anchoring are separate tickets.
+ * The selection toolbar and the saved-note layer are installed at the
+ * bottom of this file.
  */
 
 import { touchesEditable } from './selection';
+import { installAnnotationLayer } from './annotationLayer';
+import { buildTextIndex, offsetsFromRange } from './textIndex';
 import { installSelectionToolbar } from './toolbar';
+import { ANCHOR_CONTEXT_CHARS, quoteAt } from '../shared/anchor';
 import { registerHandlers, notify } from '../shared/messages';
 import type { PageContext, SelectionInfo } from '../shared/types';
 
 const LOG = '[smart-tab-notes:content]';
-
-/** How many characters either side of a highlight we keep for re-anchoring. */
-const CONTEXT_CHARS = 120;
-
 
 /* ------------------------------------------------------------------ *
  * Reading the page
  * ------------------------------------------------------------------ */
 
 /**
- * Describe the current selection, with the words around it.
+ * Describe the current selection, with the text around it.
  *
- * The prefix/suffix are a first pass at the TextQuoteSelector from the W3C
- * Web Annotation model. The anchoring ticket replaces this with something
- * that survives a changed page; until then it is enough to prove the
- * message bus carries real data.
+ * This is the same TextQuoteSelector the anchoring layer stores: the quote
+ * and ANCHOR_CONTEXT_CHARS on each side, taken from the page's normalized
+ * text so the side panel shows exactly the string a saved note would match
+ * on. Falling back to the raw selection keeps the message useful on pages
+ * the index cannot read, such as a selection inside another shadow root.
  */
 function describeSelection(): SelectionInfo | null {
   const selection = window.getSelection();
@@ -44,20 +44,19 @@ function describeSelection(): SelectionInfo | null {
   // Text in inputs and editable regions (email drafts, chat boxes) is the
   // user's own writing: never report it, matching the toolbar.
   if (touchesEditable(range)) return null;
-  const node = range.commonAncestorContainer;
-  const block =
-    node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null);
-  const blockText = block?.textContent ?? '';
-  const start = blockText.indexOf(text);
+  const index = buildTextIndex();
+  const position = offsetsFromRange(index, range);
+  const quote = position
+    ? quoteAt(index.text, position, ANCHOR_CONTEXT_CHARS)
+    : { exact: text, prefix: '', suffix: '' };
 
-  const prefix =
-    start > 0 ? blockText.slice(Math.max(0, start - CONTEXT_CHARS), start) : '';
-  const suffix =
-    start >= 0
-      ? blockText.slice(start + text.length, start + text.length + CONTEXT_CHARS)
-      : '';
-
-  return { text, prefix, suffix, url: location.href, title: document.title };
+  return {
+    text: quote.exact,
+    prefix: quote.prefix,
+    suffix: quote.suffix,
+    url: location.href,
+    title: document.title,
+  };
 }
 
 function readPageContext(): PageContext {
@@ -112,4 +111,12 @@ document.addEventListener('visibilitychange', () => {
 
 console.debug(LOG, 'ready on', location.href);
 
-installSelectionToolbar();
+/* ------------------------------------------------------------------ *
+ * Page UI
+ *
+ * The annotation layer goes first: the toolbar saves through it, and it
+ * starts looking for this page's saved notes as soon as it is installed.
+ * ------------------------------------------------------------------ */
+
+const annotations = installAnnotationLayer();
+installSelectionToolbar(annotations);
