@@ -32,6 +32,7 @@ import type {
   TabRef,
   ToolbarAction,
 } from './types';
+import { isFromExtensionPage } from './senders';
 
 /** The three places a message can be sent to. */
 export type Endpoint = 'background' | 'sidepanel' | 'content';
@@ -93,9 +94,13 @@ export interface MessageContracts {
     response: Ack;
   };
 
-  /** Ask a content script what is on its page. */
+  /**
+   * Ask a content script for its page's URL, title and selection. For page
+   * text use `tabs:getContext`, the one read path (Readability, hidden text
+   * removed, editable fields never read).
+   */
   'page:getContext': {
-    request: { includeText?: boolean; maxChars?: number };
+    request: Empty;
     response: PageContext;
   };
 
@@ -188,7 +193,9 @@ export function isNoReceiverError(error: string): boolean {
   return (
     error.includes('Receiving end does not exist') ||
     error.includes('Could not establish connection') ||
-    error.includes('message port closed')
+    error.includes('message port closed') ||
+    // A content script left over after the extension reloaded.
+    error.includes('Extension context invalidated')
   );
 }
 
@@ -275,6 +282,10 @@ export function onMessage<K extends MessageKind>(
   ): boolean => {
     if (!isEnvelope(message)) return false;
     if (message.target !== endpoint || message.kind !== kind) return false;
+    // runtime.sendMessage reaches every extension page, so a content script
+    // could post straight to the side panel and skip the background's checks.
+    // Panels only listen to the extension itself.
+    if (endpoint === 'sidepanel' && !isFromExtensionPage(sender, chrome.runtime.getURL(''))) return false;
 
     void Promise.resolve(handler(message.payload as RequestOf<K>, sender))
       .then(sendResponse)
