@@ -124,3 +124,13 @@ def test_env_file_is_read_from_backend_whatever_the_working_directory(tmp_path):
         check=True,
     )
     assert out.stdout.strip() != "read-from-cwd"
+
+
+def test_api_key_never_appears_in_settings_repr(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
+    settings = Settings()
+    assert "sk-test-secret-value" not in repr(settings)
+    assert "sk-test-secret-value" not in str(settings.model_dump())
+    assert settings.openai_api_key.get_secret_value() == "sk-test-secret-value"

@@ -12,6 +12,7 @@ import math
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
 from langchain_core.messages import BaseMessage
@@ -51,7 +52,7 @@ class MissingAPIKeyError(RuntimeError):
 
 
 def require_key() -> str:
-    key = get_settings().openai_api_key
+    key = get_settings().openai_api_key.get_secret_value()
     if not key:
         raise MissingAPIKeyError("OPENAI_API_KEY is not set. Add it to backend/.env.")
     return key
@@ -96,6 +97,7 @@ def stream_chat(messages: list[BaseMessage], usage: Usage) -> Iterator[str]:
 
 # Chunks of the same tab are re-sent on every chat turn, so cache their vectors.
 _CACHE_SIZE = 5000
+_EMBED_BATCH = 12
 _cache: OrderedDict[str, list[float]] = OrderedDict()
 _cache_lock = threading.Lock()
 
@@ -117,7 +119,11 @@ def embed_texts(texts: list[str], usage: Usage) -> list[list[float]]:
         # The embedding model takes at most 8191 tokens per input.
         inputs = [truncate_tokens(texts[i], 8000) for i in missing]
         model = OpenAIEmbeddings(model=get_settings().embedding_model, api_key=require_key())
-        vectors = model.embed_documents(inputs)
+        # Small batches in parallel come back much faster than one big request,
+        # which matters for the first question of a chat (nothing cached yet).
+        batches = [inputs[i : i + _EMBED_BATCH] for i in range(0, len(inputs), _EMBED_BATCH)]
+        with ThreadPoolExecutor(max_workers=min(8, len(batches))) as pool:
+            vectors = [v for batch in pool.map(model.embed_documents, batches) for v in batch]
         usage.embedding_tokens += sum(count_tokens(t) for t in inputs)
         with _cache_lock:
             for i, vector in zip(missing, vectors):

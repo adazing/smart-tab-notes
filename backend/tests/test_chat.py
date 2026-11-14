@@ -156,7 +156,9 @@ def test_retrieves_only_relevant_chunks_from_three_real_pages(monkeypatch):
     settings = get_settings()
     assert 0 < len(sent) <= settings.chat_top_k
     assert sum(chunk_id.startswith("t101-") for chunk_id in sent) > len(sent) / 2
-    assert not any(chunk_id.startswith("t103-") for chunk_id in sent)  # Python classes
+    # The word-overlap fake scores every page alike, so the Python page may get
+    # its one guaranteed slot; real embeddings leave it out (checked live).
+    assert sum(chunk_id.startswith("t103-") for chunk_id in sent) <= 1
     assert done["usage"]["embedding_tokens"] > 0
     # The cited chunk that was sent is kept; the one that wasn't is dropped.
     first_backprop = next(chunk_id for chunk_id in sent if chunk_id.startswith("t101-"))
@@ -252,3 +254,34 @@ def test_long_history_is_trimmed_before_it_reaches_the_model(monkeypatch):
     prompt = fake.prompts[0]
     assert all(count_tokens(m.content) <= 1_000 for m in prompt[1:])
     assert count_tokens(prompt[-1].content) > 400  # the question itself keeps more room
+
+
+def test_each_relevant_tab_gets_its_best_chunk_before_one_tab_takes_every_slot(monkeypatch):
+    from app.agents.chat import retrieve_node
+
+    monkeypatch.setattr(get_settings(), "chat_context_tokens", 400)  # ~8 of the 12 chunks fit
+    # Score = the number after "score" in the chunk text; the question is [1, 0].
+    def scored(texts, usage):
+        out = [[1.0, 0.0]]
+        for text in texts[1:]:
+            score = float(re.search(r"score (\d\.\d+)", text).group(1))
+            out.append([score, (1 - score**2) ** 0.5])
+        return out
+
+    monkeypatch.setattr(llm, "embed_texts", scored)
+    tabs = [
+        {"tab_id": 1, "title": "Long", "chunks": [{"id": f"t1-c{i}", "text": f"score 0.9{i} " + "x " * 40} for i in range(10)]},
+        {"tab_id": 2, "title": "Short", "chunks": [{"id": "t2-c0", "text": "score 0.80 " + "x " * 40}]},
+        {"tab_id": 3, "title": "Unrelated", "chunks": [{"id": "t3-c0", "text": "score 0.20 " + "x " * 40}]},
+    ]
+    out = retrieve_node({"messages": [{"role": "user", "content": "q"}], "tabs": tabs, "usage": llm.Usage()})
+    ids = [s["chunk_id"] for s in out["sources"]]
+    assert "t2-c0" in ids  # 0.80 >= 0.75 x 0.99: relevant enough to get a slot
+    assert "t3-c0" not in ids  # 0.20 is not
+    assert len(ids) == get_settings().chat_top_k
+
+
+def test_prompt_lists_every_selected_tab(monkeypatch):
+    _, fake = chat("Your selected tabs don't cover this.", monkeypatch=monkeypatch)
+    system = fake.prompts[0][0].content
+    assert "- Tab 7: Gradient descent" in system and "- Tab 9: Backpropagation" in system

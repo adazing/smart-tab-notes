@@ -97,13 +97,28 @@ def retrieve_node(state: ChatState) -> ChatState:
     ranked = sorted(range(len(sources)), key=lambda i: sources[i]["score"], reverse=True)
     picked: list[int] = []
     used = 0
-    for i in ranked:
-        if len(picked) >= settings.chat_top_k:
-            break
+
+    def take(i: int) -> None:
+        nonlocal used
+        if i in picked or len(picked) >= settings.chat_top_k:
+            return
         if used + sizes[i] > settings.chat_context_tokens and picked:
-            continue
+            return
         picked.append(i)
         used += sizes[i]
+
+    # First each tab's best chunk, if that tab is relevant at all, so a long page
+    # that mentions the topic everywhere can't crowd out a shorter page about it.
+    # Then the best of the rest.
+    top = sources[ranked[0]]["score"] if ranked else 0.0
+    best_per_tab: dict[int, int] = {}
+    for i in ranked:
+        best_per_tab.setdefault(sources[i]["tab_id"], i)
+    for i in sorted(best_per_tab.values(), key=lambda i: sources[i]["score"], reverse=True):
+        if sources[i]["score"] >= settings.chat_tab_relevance * top:
+            take(i)
+    for i in ranked:
+        take(i)
 
     # Present the picked chunks in page order, so neighbouring chunks read naturally.
     picked.sort()
@@ -119,11 +134,15 @@ Rules:
 brackets, for example [t12-c3]. If a point uses two sources, cite both: [t12-c3][t15-c0]. \
 Only use ids that appear below.
 - If the sources don't answer the question, say "Your selected tabs don't cover this." \
-and then, in one sentence, what they do cover. Cite nothing in that case.
+and then, in one sentence, name what the selected tabs (listed below) are about, \
+covering every tab. Cite nothing in that case.
 - Be concise: a short paragraph or a few bullets."""
 
 
 def build_messages(state: ChatState) -> list[BaseMessage]:
+    # All selected tabs, so the model can say what they cover even when only a
+    # few chunks were retrieved.
+    tab_list = "\n".join(f"- Tab {t['tab_id']}: {t.get('title', '')[:200]}" for t in state["tabs"])
     sources = "\n\n---\n\n".join(
         f"[{s['chunk_id']}] Tab {s['tab_id']}: {s['title'][:200]}"
         + (f" — {s['heading'][:200]}" if s["heading"] else "")
@@ -137,7 +156,10 @@ def build_messages(state: ChatState) -> list[BaseMessage]:
         budget = 1_000 if i == len(recent) - 1 else 400
         cls = HumanMessage if message["role"] == "user" else AIMessage
         history.append(cls(truncate_tokens(message["content"], budget)))
-    return [SystemMessage(f"{SYSTEM_PROMPT}\n\nSources:\n\n{sources}"), *history]
+    return [
+        SystemMessage(f"{SYSTEM_PROMPT}\n\nThe user's selected tabs:\n{tab_list}\n\nSources:\n\n{sources}"),
+        *history,
+    ]
 
 
 def answer_node(state: ChatState) -> ChatState:
