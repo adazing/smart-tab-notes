@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     tabs_token_budget: int = 2000
     per_tab_token_budget: int = 600
 
+    # Chat (/chat) and tab suggestions (/rank-tabs).
+    embedding_model: str = "text-embedding-3-small"
+    chat_top_k: int = 8
+    chat_context_tokens: int = 3500
+    chat_history_messages: int = 10
+    rank_suggest_threshold: float = 0.3
+
     @property
     def allowed_origin_list(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]

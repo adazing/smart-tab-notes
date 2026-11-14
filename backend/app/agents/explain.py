@@ -150,14 +150,13 @@ def build_messages(state: ExplainState) -> list[BaseMessage]:
 
 
 def call_llm(messages: list[BaseMessage]) -> str:
-    """Single seam for the model call so tests can mock it."""
-    from langchain_openai import ChatOpenAI
+    """Single seam for the model call so tests can mock it. Logs tokens used."""
+    from app import llm
 
-    settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set. Add it to backend/.env.")
-    llm = ChatOpenAI(model=settings.openai_model, api_key=settings.openai_api_key, temperature=0.2)
-    return str(llm.invoke(messages).content)
+    usage = llm.Usage()
+    text = llm.complete(messages, usage)
+    usage.log("/explain")
+    return text
 
 
 def llm_node(state: ExplainState) -> ExplainState:

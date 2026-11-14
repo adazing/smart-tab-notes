@@ -1,12 +1,24 @@
+import json
 import logging
+import time
+from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
+from app import llm
+from app.agents.chat import chat_graph, rank_tabs
 from app.agents.explain import explain_graph
 from app.config import get_settings
-from app.schemas import ExplainRequest, ExplainResponse
+from app.schemas import (
+    ChatRequest,
+    ExplainRequest,
+    ExplainResponse,
+    RankTabsRequest,
+    RankTabsResponse,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -43,3 +55,87 @@ async def explain(req: ExplainRequest) -> ExplainResponse:
         logger.exception("/explain failed")
         raise HTTPException(status_code=502, detail="The explanation service failed. Try again.") from exc
     return ExplainResponse(explanation=result["explanation"], used_tab_ids=result["used_tab_ids"])
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _require_key() -> None:
+    try:
+        llm.require_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/chat")
+def chat(req: ChatRequest) -> StreamingResponse:
+    """Stream an answer as Server-Sent Events: `token`* then `done` (or `error`)."""
+    _require_key()
+
+    def events() -> Iterator[str]:
+        usage = llm.Usage()
+        started = time.perf_counter()
+        first_token_ms: int | None = None
+        final: dict = {}
+        try:
+            for mode, chunk in chat_graph.stream(
+                {
+                    "messages": [m.model_dump() for m in req.messages],
+                    "tabs": [t.model_dump() for t in req.tabs],
+                    "usage": usage,
+                },
+                stream_mode=["custom", "values"],
+            ):
+                if mode == "custom" and "token" in chunk:
+                    if first_token_ms is None:
+                        first_token_ms = round((time.perf_counter() - started) * 1000)
+                    yield _sse("token", {"text": chunk["token"]})
+                elif mode == "values":
+                    final = chunk
+        except Exception:
+            logger.exception("/chat failed")
+            yield _sse("error", {"detail": "The chat service failed. Try again."})
+            return
+
+        total_ms = round((time.perf_counter() - started) * 1000)
+        usage.log(
+            "/chat",
+            tabs=len(req.tabs),
+            sources=len(final.get("sources", [])),
+            retrieval=final.get("retrieval"),
+            first_token_ms=first_token_ms,
+            total_ms=total_ms,
+        )
+        yield _sse(
+            "done",
+            {
+                "answer": final.get("answer", ""),
+                "citations": final.get("citations", []),
+                "used_tab_ids": final.get("used_tab_ids", []),
+                "covered": final.get("covered", False),
+                "usage": usage.as_dict(),
+                "timing": {"first_token_ms": first_token_ms, "total_ms": total_ms},
+            },
+        )
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/rank-tabs", response_model=RankTabsResponse)
+async def rank_tabs_endpoint(req: RankTabsRequest) -> RankTabsResponse:
+    _require_key()
+    usage = llm.Usage()
+    try:
+        scores = await run_in_threadpool(
+            rank_tabs, req.question, [t.model_dump() for t in req.tabs], usage
+        )
+    except Exception as exc:
+        logger.exception("/rank-tabs failed")
+        raise HTTPException(status_code=502, detail="Tab ranking failed. Try again.") from exc
+    usage.log("/rank-tabs", tabs=len(req.tabs))
+    return RankTabsResponse(scores=scores)
