@@ -1,0 +1,17 @@
+{
+  "comment": "Build tooling only: the Vite configs and scripts/. Kept apart from tsconfig.json so extension code cannot reach for Node APIs by accident.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "allowJs": true,
+    "checkJs": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["vite.config.ts", "vite.content.config.ts", "scripts"]
+}
