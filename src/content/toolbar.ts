@@ -86,6 +86,8 @@ export function installSelectionToolbar(): () => void {
   async function report(payload: ToolbarAction): Promise<void> {
     const result = await sendToBackground('toolbar:action', payload);
     if (!result.ok && !disposed && snapshot?.text === payload.text && snapshot.url === payload.url) {
+      // Stop the placeholder explanation from replacing this notice.
+      window.clearTimeout(explanationTimer);
       status('Extension messaging is unavailable. Reload this page after reloading the extension.');
     }
   }
@@ -207,8 +209,12 @@ export function installSelectionToolbar(): () => void {
     if (event.key !== 'Escape' || panel.hidden) return;
     if (!detail.hidden) closeDetail(true);
     else hide();
-    event.preventDefault();
-    event.stopPropagation();
+    // Only keep Escape from the page when it was pressed inside the toolbar.
+    // Otherwise the page's own Escape handling (closing its dialogs) still runs.
+    if (event.composedPath().includes(host)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }, { signal, capture: true });
   window.addEventListener('scroll', refresh, { signal, capture: true, passive: true });
   window.addEventListener('resize', refresh, { signal });
