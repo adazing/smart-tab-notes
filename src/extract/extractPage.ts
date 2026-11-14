@@ -219,10 +219,43 @@ export function restoreHeadings(readable: TextBlock[], source: TextBlock[]): Tex
   return out;
 }
 
+/**
+ * A copy of `doc` without the elements the page is not showing (display:none,
+ * visibility:hidden, content-visibility:hidden...). Readability only checks
+ * inline styles, so without this, text hidden by a stylesheet (for example
+ * instructions aimed at the AI) would be extracted. Content inside a closed
+ * <details> is kept: it is real content the reader can open.
+ *
+ * Needs Element.checkVisibility (Chrome 105+). Without it (jsdom, old
+ * browsers) the copy is returned unfiltered.
+ */
+export function visibleClone(doc: Document): Document {
+  const clone = doc.cloneNode(true) as Document;
+  if (!doc.body || !clone.body) return clone;
+  const live = doc.body.getElementsByTagName('*');
+  const copy = clone.body.getElementsByTagName('*');
+  if (live.length !== copy.length) return clone;
+
+  const hidden: Element[] = [];
+  let hiddenRoot: Element | null = null;
+  for (let i = 0; i < live.length; i++) {
+    const el = live[i]!;
+    if (hiddenRoot?.contains(el)) continue; // already removed with its ancestor
+    const check = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
+    if (typeof check !== 'function') return clone;
+    if (!check.call(el) && !el.closest('details:not([open])')) {
+      hidden.push(copy[i]!);
+      hiddenRoot = el;
+    }
+  }
+  for (const el of hidden) el.remove();
+  return clone;
+}
+
 function fromReadability(doc: Document): { title: string; blocks: TextBlock[] } | null {
   let article: ReturnType<Readability['parse']>;
   try {
-    article = new Readability(doc.cloneNode(true) as Document).parse();
+    article = new Readability(visibleClone(doc)).parse();
   } catch {
     return null;
   }

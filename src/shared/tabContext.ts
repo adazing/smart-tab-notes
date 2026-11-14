@@ -55,8 +55,8 @@ interface InjectedResult {
   page: ExtractedPage | null;
 }
 
-/** Runs in the page, after extract.js has defined the global. */
-function runExtractor(maxChars: number): InjectedResult {
+/** Runs in the page, after extract.js has defined the global. Exported for tests. */
+export function runExtractor(maxChars: number): InjectedResult {
   const contentType = document.contentType;
   if (contentType === 'application/pdf') return { contentType, page: null };
   const api = (globalThis as unknown as {
@@ -110,8 +110,7 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
       truncated: page.truncated,
     };
   } catch (error) {
-    // e.g. file:// without "Allow access to file URLs", an error page, or a
-    // tab that navigated away mid-injection.
+    // e.g. Chrome's error page, or a tab that navigated away mid-injection.
     return empty(base, 'error', describe(error));
   }
 }

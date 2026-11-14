@@ -2,7 +2,7 @@
 
 Base URL (local dev): `http://localhost:8000`
 
-All bodies are JSON. CORS allows any `chrome-extension://` origin, plus any origins listed in `ALLOWED_ORIGINS` in `backend/.env`.
+All bodies are JSON. CORS allows the extension ids listed in `EXTENSION_IDS` in `backend/.env` (find yours at `chrome://extensions`), plus any origins in `ALLOWED_ORIGINS`. While `EXTENSION_IDS` is empty, any Chrome extension is allowed and the server logs a warning: fine for local development, not for a deployed backend.
 
 ## GET /health
 
@@ -22,18 +22,18 @@ Explains a highlighted passage in plain language (2 to 4 sentences), using the c
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `selected_text` | string | yes | The highlighted text. Must not be empty. |
-| `page_text` | string | no | Readable text of the current page. The backend trims it to a window around the selection. |
-| `other_tabs` | array of Tab | no | Other open tabs. Tabs with empty `text` are ignored. |
+| `selected_text` | string | yes | The highlighted text. 1 to 20,000 characters. Matched in the page ignoring case and whitespace, so a selection across paragraphs is found. Only the first ~600 tokens are sent to the model. |
+| `page_text` | string | no | Readable text of the current page, up to 1,000,000 characters. The backend trims it to a window of at most 1,500 tokens around the selection. |
+| `other_tabs` | array of Tab | no | Up to 20 other open tabs. Tabs with empty `text` are ignored. |
 
 **Tab**
 
 | Field | Type | Notes |
 |---|---|---|
 | `tab_id` | integer | Chrome tab id |
-| `title` | string | |
-| `url` | string | |
-| `text` | string | Readable text of the tab. The backend keeps the most relevant tabs and trims each to fit a token budget. |
+| `title` | string | Up to 1,000 characters. |
+| `url` | string | Up to 4,096 characters. |
+| `text` | string | Up to 300,000 characters. Readable text of the tab. The backend keeps the most relevant tabs and trims each to fit a token budget. |
 
 ```json
 {
@@ -63,9 +63,9 @@ Explains a highlighted passage in plain language (2 to 4 sentences), using the c
 
 | Status | When | Body |
 |---|---|---|
-| 422 | Invalid body (for example, missing or empty `selected_text`) | FastAPI validation error |
+| 422 | Invalid body: missing or empty `selected_text`, or any field over its size limit | FastAPI validation error |
 | 503 | Backend has no OpenAI key configured | `{ "detail": "OPENAI_API_KEY is not set. Add it to backend/.env." }` |
-| 502 | The LLM call failed | `{ "detail": "The explanation service failed. Try again." }` |
+| 502 | The LLM call or anything else on the server failed | `{ "detail": "The explanation service failed. Try again." }` |
 
 ## Example
 
