@@ -193,10 +193,12 @@ export function restoreHeadings(readable: TextBlock[], source: TextBlock[]): Tex
     // A short paragraph that is really a page heading plus its "[edit]" link
     // (Readability flattens Wikipedia's heading wrappers in live Chrome pages):
     // treat it as that heading instead of repeating it as text.
-    if (block.text.length <= 200) {
-      const asHeading = cleanHeading(block.text);
+    // Only when an edit/anchor mark was actually stripped: a plain paragraph
+    // that happens to read "Examples" is body text, not the Examples heading.
+    const asHeading = block.text.length <= 200 ? cleanHeading(block.text) : '';
+    if (asHeading && asHeading !== block.text.trim()) {
       const next = headingsAt.findIndex((h, i) => i > headingIndex && h.block.text === asHeading);
-      if (asHeading && next >= 0) {
+      if (next >= 0) {
         headingIndex = next;
         cursor = headingsAt[next]!.offset;
         emitHeading(headingsAt[next]!.block);
