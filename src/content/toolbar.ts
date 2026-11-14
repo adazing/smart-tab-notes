@@ -85,7 +85,8 @@ export function installSelectionToolbar(): () => void {
 
   async function report(payload: ToolbarAction): Promise<void> {
     const result = await sendToBackground('toolbar:action', payload);
-    if (!result.ok && !disposed && snapshot?.text === payload.text && snapshot.url === payload.url) {
+    const failed = !result.ok || !result.data.ok; // undelivered, or the worker said no
+    if (failed && !disposed && snapshot?.text === payload.text && snapshot.url === payload.url) {
       // Stop the placeholder explanation from replacing this notice.
       window.clearTimeout(explanationTimer);
       status('Extension messaging is unavailable. Reload this page after reloading the extension.');

@@ -66,11 +66,14 @@ export function countWords(text: string): number {
 interface WalkOptions {
   /** Fallback mode: skip page chrome and anything not rendered. */
   visibleOnly: boolean;
+  /** Use layout (checkVisibility) to find hidden elements. Off for detached copies. Default true. */
+  layout?: boolean;
 }
 
-function isHidden(el: Element): boolean {
+function isHidden(el: Element, layout: boolean): boolean {
   if ((el as HTMLElement).hidden) return true;
   if (el.getAttribute('aria-hidden') === 'true') return true;
+  if (!layout) return false;
   // checkVisibility is Chrome 105+; jsdom has no layout, so skip it there.
   const check = (el as HTMLElement & { checkVisibility?: () => boolean }).checkVisibility;
   return typeof check === 'function' ? !check.call(el) : false;
@@ -101,7 +104,7 @@ export function blocksFrom(root: Element, options: WalkOptions): TextBlock[] {
       if (SKIP_CHROME.has(tag)) return;
       const role = el.getAttribute('role');
       if (role && SKIP_ROLES.has(role)) return;
-      if (isHidden(el)) return;
+      if (isHidden(el, options.layout ?? true)) return;
     }
 
     if (tag === 'BR') {
@@ -219,43 +222,104 @@ export function restoreHeadings(readable: TextBlock[], source: TextBlock[]): Tex
   return out;
 }
 
+/** Never content, even when "visible". */
+const NON_CONTENT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+
 /**
- * A copy of `doc` without the elements the page is not showing (display:none,
- * visibility:hidden, content-visibility:hidden...). Readability only checks
- * inline styles, so without this, text hidden by a stylesheet (for example
- * instructions aimed at the AI) would be extracted. Content inside a closed
- * <details> is kept: it is real content the reader can open.
+ * Computed style, or null if it can't be computed. jsdom's getComputedStyle
+ * throws on some real-world stylesheets (Wikipedia's); a page must never make
+ * extraction fail, so treat that as "no information".
+ */
+function styleOf(view: Window, el: Element): CSSStyleDeclaration | null {
+  try {
+    return view.getComputedStyle(el);
+  } catch {
+    return null;
+  }
+}
+
+/** `el` has no rendered box: display:none or content-visibility:hidden on it or an ancestor. */
+function notRendered(el: Element, view: Window): boolean {
+  const check = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
+  if (typeof check === 'function') return !check.call(el);
+  // No layout engine (jsdom): approximate with computed display up the tree.
+  for (let e: Element | null = el; e; e = e.parentElement) {
+    if (styleOf(view, e)?.display === 'none') return true;
+  }
+  return false;
+}
+
+/** Inside a closed <details>: hidden only by its own display:none (or an ancestor's below the details). */
+function hiddenInsideDetails(el: Element, details: Element, view: Window): boolean {
+  for (let e: Element | null = el; e && e !== details; e = e.parentElement) {
+    if (styleOf(view, e)?.display === 'none') return true;
+  }
+  return false;
+}
+
+/**
+ * A copy of `doc` without what the page is not showing, so hidden text (for
+ * example instructions aimed at the AI) never reaches it. Readability only
+ * checks inline styles, so it can't do this itself.
  *
- * Needs Element.checkVisibility (Chrome 105+). Without it (jsdom, old
- * browsers) the copy is returned unfiltered.
+ * Removed: display:none and content-visibility:hidden subtrees,
+ * visibility:hidden elements (unless something inside is made visible
+ * again), and script/style/noscript/template.
+ * Kept: display:contents wrappers (they have no box, their children decide)
+ * and the content of closed <details> (the reader can open it), except what
+ * is hidden in its own right.
  */
 export function visibleClone(doc: Document): Document {
   const clone = doc.cloneNode(true) as Document;
-  if (!doc.body || !clone.body) return clone;
-  const live = doc.body.getElementsByTagName('*');
-  const copy = clone.body.getElementsByTagName('*');
+  const view = doc.defaultView;
+  if (!doc.body || !clone.body || !view) return clone;
+  const live = Array.from(doc.body.getElementsByTagName('*'));
+  const copy = Array.from(clone.body.getElementsByTagName('*'));
   if (live.length !== copy.length) return clone;
 
-  const hidden: Element[] = [];
-  let hiddenRoot: Element | null = null;
+  const remove: Element[] = [];
+  let removedRoot: Element | null = null;
   for (let i = 0; i < live.length; i++) {
     const el = live[i]!;
-    if (hiddenRoot?.contains(el)) continue; // already removed with its ancestor
-    const check = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
-    if (typeof check !== 'function') return clone;
-    if (!check.call(el) && !el.closest('details:not([open])')) {
-      hidden.push(copy[i]!);
-      hiddenRoot = el;
+    if (removedRoot?.contains(el)) continue; // goes with its ancestor
+    const style = styleOf(view, el);
+
+    let hide = NON_CONTENT.has(el.tagName.toUpperCase());
+    if (!hide && style?.display !== 'contents') {
+      const closedDetails = el.parentElement?.closest('details:not([open])');
+      hide = closedDetails && !el.matches('summary')
+        ? hiddenInsideDetails(el, closedDetails, view)
+        : notRendered(el, view);
+    }
+    if (!hide && (style?.visibility === 'hidden' || style?.visibility === 'collapse')) {
+      const visibleInside = Array.from(el.querySelectorAll('*')).some(
+        (d) => styleOf(view, d)?.visibility === 'visible',
+      );
+      if (visibleInside) {
+        // Keep the element for its visible descendants, but drop its own text,
+        // which is still hidden. (Hidden child elements are handled in turn.)
+        for (const node of Array.from(copy[i]!.childNodes)) {
+          if (node.nodeType === 3 /* TEXT_NODE */) node.remove();
+        }
+      } else {
+        hide = true;
+      }
+    }
+    if (hide) {
+      remove.push(copy[i]!);
+      removedRoot = el;
     }
   }
-  for (const el of hidden) el.remove();
+  for (const el of remove) el.remove();
   return clone;
 }
 
-function fromReadability(doc: Document): { title: string; blocks: TextBlock[] } | null {
+/** `visible` is visibleClone(page); `source` is its blocks, used to restore headings. */
+function fromReadability(visible: Document, source: TextBlock[]): { title: string; blocks: TextBlock[] } | null {
   let article: ReturnType<Readability['parse']>;
   try {
-    article = new Readability(visibleClone(doc)).parse();
+    // Readability mutates what it is given; keep `visible` intact.
+    article = new Readability(visible.cloneNode(true) as Document).parse();
   } catch {
     return null;
   }
@@ -266,7 +330,6 @@ function fromReadability(doc: Document): { title: string; blocks: TextBlock[] } 
   const blocks = blocksFrom(parsed.body, { visibleOnly: false });
   const words = blocks.reduce((n, b) => n + countWords(b.text), 0);
   if (words < MIN_ARTICLE_WORDS) return null;
-  const source = doc.body ? blocksFrom(doc.body, { visibleOnly: false }) : [];
   return { title: collapse(article.title ?? ''), blocks: restoreHeadings(blocks, source) };
 }
 
@@ -307,12 +370,20 @@ export function fromStackExchange(doc: Document): { title: string; blocks: TextB
 export function extractPage(doc: Document = document, options: ExtractOptions = {}): ExtractedPage {
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
 
+  // Everything below reads the page with hidden elements removed.
+  const visible = visibleClone(doc);
+  const body = visible.body;
+
   // Site rules first, then Readability, then the visible-text fallback.
-  const site = fromStackExchange(doc);
-  const readable = site ? null : fromReadability(doc);
+  const site = fromStackExchange(visible);
+  const source = !site && body ? blocksFrom(body, { visibleOnly: false }) : [];
+  const readable = site ? null : fromReadability(visible, source);
   const extractor: ExtractedPage['extractor'] = site ? 'stack-exchange' : readable ? 'readability' : 'visible-text';
   const rawBlocks =
-    site?.blocks ?? readable?.blocks ?? (doc.body ? blocksFrom(doc.body, { visibleOnly: true }) : []);
+    site?.blocks ??
+    readable?.blocks ??
+    // The clone has no layout, so only skip page chrome and [hidden] here.
+    (body ? blocksFrom(body, { visibleOnly: true, layout: false }) : []);
 
   const { blocks, truncated } = capBlocks(rawBlocks, maxChars);
   const text = blocks.map((b) => b.text).join('\n\n');

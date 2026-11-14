@@ -47,6 +47,12 @@ describe('chunkBlocks', () => {
     expect(chunks.map((c) => c.heading)).toEqual(['One', 'Two']);
   });
 
+  it('never leaves a heading alone in a chunk, even before a very long block', () => {
+    const chunks = chunkBlocks([p(para(5)), h('Code'), p('x'.repeat(5000))], 1);
+    expect(chunks.every((c) => c.text.trim() !== c.heading || c.heading === '')).toBe(true);
+    expect(chunks.find((c) => c.text === 'Code')).toBeUndefined();
+  });
+
   it('labels text before any heading with an empty heading', () => {
     expect(chunkBlocks([p('Hello there.')], 1)[0]!.heading).toBe('');
   });

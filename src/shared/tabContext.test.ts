@@ -106,6 +106,16 @@ describe('getTabContext', () => {
     expect(blocked!.error).toContain('error page');
   });
 
+  it('labels the result with the page actually read if the tab navigated meanwhile', async () => {
+    tabs[1] = tab(1, 'https://example.com/a');
+    pageResults[1] = { contentType: 'text/html', page: { ...article, url: 'https://other.example/b', title: 'Page B' } };
+    expect((await getTabContext([1]))[0]).toMatchObject({ status: 'ok', url: 'https://other.example/b', title: 'Page B' });
+
+    tabs[2] = tab(2, 'https://example.com/a');
+    pageResults[2] = { contentType: 'text/html', page: { ...article, url: 'chrome://settings/' } };
+    expect((await getTabContext([2]))[0]).toMatchObject({ status: 'restricted', url: 'chrome://settings/', text: '' });
+  });
+
   it('reports local files as restricted: the extension has no file:// permission', async () => {
     tabs[1] = tab(1, 'file:///Users/me/notes.html');
     expect((await getTabContext([1]))[0]!.status).toBe('restricted');

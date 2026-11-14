@@ -13,7 +13,7 @@
     "verify": "node scripts/verify-dist.mjs",
     "test": "vitest run",
     "test:toolbar": "vitest run src/content",
-    "test:browser": "playwright test",
+    "test:browser": "npm run build && playwright test",
     "test:sites": "vite-node scripts/site-check.ts",
     "test:storage": "vitest run src/shared"
   },

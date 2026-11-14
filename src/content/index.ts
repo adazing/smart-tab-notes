@@ -20,8 +20,6 @@ const LOG = '[smart-tab-notes:content]';
 /** How many characters either side of a highlight we keep for re-anchoring. */
 const CONTEXT_CHARS = 120;
 
-/** Default cap on how much page text we hand back. */
-const DEFAULT_MAX_CHARS = 20_000;
 
 /* ------------------------------------------------------------------ *
  * Reading the page
@@ -62,20 +60,8 @@ function describeSelection(): SelectionInfo | null {
   return { text, prefix, suffix, url: location.href, title: document.title };
 }
 
-function readPageContext(includeText: boolean, maxChars: number): PageContext {
-  const context: PageContext = {
-    url: location.href,
-    title: document.title,
-    selection: describeSelection(),
-  };
-
-  if (includeText) {
-    const full = document.body?.innerText ?? '';
-    context.text = full.slice(0, maxChars);
-    context.truncated = full.length > maxChars;
-  }
-
-  return context;
+function readPageContext(): PageContext {
+  return { url: location.href, title: document.title, selection: describeSelection() };
 }
 
 /* ------------------------------------------------------------------ *
@@ -85,8 +71,7 @@ function readPageContext(includeText: boolean, maxChars: number): PageContext {
 registerHandlers('content', {
   'ping': async () => ({ ok: true, endpoint: 'content', at: Date.now() }),
 
-  'page:getContext': async ({ includeText = false, maxChars = DEFAULT_MAX_CHARS }) =>
-    readPageContext(includeText, maxChars),
+  'page:getContext': async () => readPageContext(),
 
   'page:getSelection': async () => ({ selection: describeSelection() }),
 });

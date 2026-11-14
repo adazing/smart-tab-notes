@@ -99,6 +99,13 @@ async function getOne(tabId: number, options: TabContextOptions): Promise<TabCon
     if (!result.page) return empty(base, 'pdf');
 
     const { page } = result;
+    // The tab can navigate between tabs.get and the injection. Label the
+    // result with the page that was actually read, and re-check it may be.
+    if (page.url && page.url !== url) {
+      base.url = page.url;
+      base.title = page.title;
+      if (!isAccessible(page.url)) return empty(base, 'restricted');
+    }
     return {
       ...base,
       title: base.title || page.title,

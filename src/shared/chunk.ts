@@ -85,6 +85,7 @@ export function chunkBlocks(
   let chunkHeading = '';
   let parts: string[] = [];
   let size = 0; // characters in `parts`, including separators
+  let hasText = false; // `parts` holds more than headings
 
   const flush = (): void => {
     if (parts.length === 0) return;
@@ -99,6 +100,7 @@ export function chunkBlocks(
     });
     parts = [];
     size = 0;
+    hasText = false;
   };
 
   for (const block of blocks) {
@@ -118,13 +120,15 @@ export function chunkBlocks(
     }
 
     for (const piece of splitLongText(text, maxChars)) {
-      if (size > 0 && size + piece.length > maxChars) {
+      // Never flush a chunk that holds only a heading: keep it with its text.
+      if (hasText && size + piece.length > maxChars) {
         flush();
         chunkHeading = heading;
       }
       if (parts.length === 0) chunkHeading = heading;
       parts.push(piece);
       size += piece.length + 2;
+      hasText = true;
     }
   }
   flush();

@@ -154,6 +154,10 @@ describe('URL normalization', () => {
     ['https://a.com/s?UTM_Source=x&q=1', 'https://a.com/s?q=1'],
     ['https://a.com/s?utm%5Fsource=x&q=1', 'https://a.com/s?q=1'],
     ['https://a.com/s?q=1&&', 'https://a.com/s?q=1'],
+    // Hash routes are separate pages of a single-page app; other fragments aren't.
+    ['https://app.com/#/inbox', 'https://app.com/#/inbox'],
+    ['https://app.com/#!/settings?utm_source=x', 'https://app.com/#!/settings?utm_source=x'],
+    ['https://app.com/docs#section-2', 'https://app.com/docs'],
     ['https://example.com/?UTM_SOURCE=a&fbclid=b&gclid=c&msclkid=d&mc_eid=e', 'https://example.com/'],
     ['https://example.com/a/b///#hash', 'https://example.com/a/b'],
     ['https://example.com', 'https://example.com/'],
@@ -166,5 +170,12 @@ describe('URL normalization', () => {
 
   it.each(['bad URL', '/relative', 'file:///tmp/file', 'javascript:alert(1)'])('rejects %s', input => {
     expect(() => normalizeUrl(input)).toThrow(TypeError);
+  });
+});
+
+describe('getPageByUrl for pages that can never be saved', () => {
+  it('returns undefined instead of throwing', async () => {
+    await expect(getPageByUrl('chrome://newtab/')).resolves.toBeUndefined();
+    await expect(getPageByUrl('not a url')).resolves.toBeUndefined();
   });
 });

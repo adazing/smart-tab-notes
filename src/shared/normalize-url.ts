@@ -16,7 +16,9 @@ export function normalizeUrl(input: string): string {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new TypeError('Saved pages must use an absolute HTTP(S) URL');
   }
-  url.hash = '';
+  // Hash routes (#/inbox, #!/settings) are different pages of a single-page
+  // app, so keep them; other fragments (#section-2) are the same page.
+  if (!/^#!?\//.test(url.hash)) url.hash = '';
   // Filter the raw query text rather than going through URLSearchParams, which
   // re-encodes every remaining parameter (%20 becomes +, ~ becomes %7E) and
   // would stop a clean revisit from matching the saved page.

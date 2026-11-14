@@ -156,6 +156,13 @@ describe('toolbar actions', () => {
     document.body.removeEventListener('keydown', pageSaw);
   });
 
+  it('shows the error when the worker answers but refuses', async () => {
+    vi.mocked(sendToBackground).mockResolvedValueOnce({ ok: true, data: { ok: false, reason: 'not from a tab' } });
+    select(); click('Highlight');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(root().textContent).toContain('Extension messaging is unavailable');
+  });
+
   it('keeps the messaging error instead of replacing it with the mock explanation', async () => {
     vi.mocked(sendToBackground).mockResolvedValueOnce({ ok: false, error: 'Extension context invalidated.' });
     select(); click('Explain');
