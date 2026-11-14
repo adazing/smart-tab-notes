@@ -93,8 +93,8 @@ Answers a question using only the tabs the user picked, citing the chunk each po
 | Field | Type | Notes |
 |---|---|---|
 | `tab_id` | integer | Chrome tab id |
-| `title` | string | |
-| `url` | string | |
+| `title` | string | Up to 1,000 characters. |
+| `url` | string | Up to 4,096 characters. |
 | `chunks` | array of `{ id, heading, text }` | At least one. Exactly the `chunks` from the extension's `getTabContext` (`id` and `heading` and `text` of each `TextChunk`). `id` must match `[A-Za-z0-9_.:-]{1,64}` and be unique across all tabs, which `t<tabId>-c<n>` ids are. Chunk `text` up to 10,000 characters. |
 
 ```json
@@ -117,7 +117,7 @@ Answers a question using only the tabs the user picked, citing the chunk each po
 |---|---|---|
 | `token` | `{ "text": string }` | Many times: the next piece of the answer. Append them in order. |
 | `done` | see below | Once, last, on success. |
-| `error` | `{ "detail": string }` | Once, last, if the model fails mid-answer. Show `detail`; keep any text already shown or discard it. |
+| `error` | `{ "detail": string }` | Once, last, if anything fails. It can be the **first** event (for example if retrieval fails), so don't assume a `token` came first. Show `detail`. |
 
 ```text
 event: token
@@ -145,7 +145,7 @@ data: {"answer": "…", "citations": [...], "used_tab_ids": [101], "covered": tr
 
 **Citation**: `{ "n": 1, "chunk_id": "t101-c1", "tab_id": 101, "title": "Backpropagation", "url": "https://…", "heading": "Overview" }`. `n` is the chip number: show `[t101-c1]` as chip **1**, and clicking it switches to `tab_id`.
 
-**How chunks are chosen.** If all chunks fit in about 3,500 tokens they are all sent. Otherwise the question (plus the previous question, for short follow-ups like "and why?") and every chunk are embedded with `text-embedding-3-small`, and the 8 most similar chunks that fit are sent. Chunk embeddings are cached in memory, so later turns in the same chat only embed the new question.
+**How chunks are chosen.** If all chunks fit in about 3,500 tokens they are all sent. Otherwise the question (plus the previous question, for short follow-ups like "and why?") and every chunk are embedded with `text-embedding-3-small`, and up to 8 chunks that fit are sent: first each tab's best chunk (if it scores at least 75% of the best chunk overall, so every relevant tab is represented), then the most similar of the rest. Chunk embeddings are cached in memory, so later turns in the same chat only embed the new question.
 
 **Errors before streaming starts** (normal JSON responses):
 
@@ -200,4 +200,4 @@ Every `/explain`, `/chat` and `/rank-tabs` request logs the tokens it used to th
 INFO:     /chat tokens: embedding_tokens=6812 prompt_tokens=3420 completion_tokens=96 total_tokens=10328 tabs=3 sources=8 retrieval=embeddings first_token_ms=1450 total_ms=3020
 ```
 
-`/chat` also returns the same numbers in its `done` event.
+`/chat` also returns the same numbers in its `done` event. Requests that fail or are abandoned still log what they used. If the client disconnects mid-answer, generation stops within about a token. Answers are capped at 700 tokens, and OpenAI calls time out after 30 seconds.

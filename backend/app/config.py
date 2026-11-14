@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     chat_history_messages: int = 10
     rank_suggest_threshold: float = 0.3
 
+    # Every OpenAI call: give up after this many seconds (one retry), and cap
+    # how long an answer can get.
+    openai_timeout_s: float = 30
+    answer_max_tokens: int = 700
+
     @property
     def allowed_origin_list(self) -> list[str]:
         origins = [o.strip() for o in self.allowed_origins.split(",") if o.strip()]

@@ -16,6 +16,7 @@ Streaming: answer_node sends each token through LangGraph's custom stream
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -42,6 +43,7 @@ class ChatState(TypedDict, total=False):
     messages: list[dict[str, str]]
     tabs: list[dict[str, Any]]
     usage: llm.Usage
+    cancel: threading.Event  # set when the client disconnects
     # retrieve_node
     question: str
     sources: list[Source]
@@ -165,7 +167,7 @@ def build_messages(state: ChatState) -> list[BaseMessage]:
 def answer_node(state: ChatState) -> ChatState:
     write = get_stream_writer()
     parts: list[str] = []
-    for token in llm.stream_chat(build_messages(state), state["usage"]):
+    for token in llm.stream_chat(build_messages(state), state["usage"], state.get("cancel")):
         parts.append(token)
         write({"token": token})
     return {"answer": "".join(parts)}

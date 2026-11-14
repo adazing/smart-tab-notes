@@ -7,11 +7,12 @@ so tests can replace them with fakes: `monkeypatch.setattr(llm, "embed_texts", f
 from __future__ import annotations
 
 import hashlib
+from array import array
 import logging
 import math
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
@@ -73,6 +74,10 @@ def chat_model(streaming: bool = False):
         temperature=0.2,
         streaming=streaming,
         stream_usage=True,
+        # A stalled call would otherwise hold a worker thread for minutes.
+        timeout=settings.openai_timeout_s,
+        max_retries=1,
+        max_tokens=settings.answer_max_tokens,
     )
 
 
@@ -83,12 +88,24 @@ def complete(messages: list[BaseMessage], usage: Usage) -> str:
     return str(response.content)
 
 
-def stream_chat(messages: list[BaseMessage], usage: Usage) -> Iterator[str]:
-    """Yield the reply token by token; fills in `usage` when the stream ends."""
-    for chunk in chat_model(streaming=True).stream(messages):
-        usage.add_chat(getattr(chunk, "usage_metadata", None))
-        if chunk.content:
-            yield str(chunk.content)
+def stream_chat(
+    messages: list[BaseMessage], usage: Usage, cancel: threading.Event | None = None
+) -> Iterator[str]:
+    """Yield the reply token by token; fills in `usage` as the stream goes.
+
+    Setting `cancel` (the client went away) stops after the current token and
+    closes the request to OpenAI, so an abandoned answer stops costing tokens.
+    """
+    stream = chat_model(streaming=True).stream(messages)
+    try:
+        for chunk in stream:
+            usage.add_chat(getattr(chunk, "usage_metadata", None))
+            if cancel is not None and cancel.is_set():
+                return
+            if chunk.content:
+                yield str(chunk.content)
+    finally:
+        stream.close()
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +113,10 @@ def stream_chat(messages: list[BaseMessage], usage: Usage) -> Iterator[str]:
 # ---------------------------------------------------------------------------
 
 # Chunks of the same tab are re-sent on every chat turn, so cache their vectors.
+# Stored as float32 arrays: about 6 KB each (Python float lists are ~50 KB).
 _CACHE_SIZE = 5000
 _EMBED_BATCH = 12
-_cache: OrderedDict[str, list[float]] = OrderedDict()
+_cache: OrderedDict[str, array] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
@@ -106,19 +124,33 @@ def _key(text: str) -> str:
     return hashlib.sha256(f"{get_settings().embedding_model}\n{text}".encode()).hexdigest()
 
 
-def embed_texts(texts: list[str], usage: Usage) -> list[list[float]]:
+def embed_texts(texts: list[str], usage: Usage) -> list[Sequence[float]]:
     """Embed texts, reusing cached vectors. Only uncached texts count toward usage."""
     from app.agents.explain import count_tokens, truncate_tokens
 
     keys = [_key(t) for t in texts]
+    # Take the cached vectors now, so inserting new ones below can't evict them
+    # before they're returned. Hits count as recent use (LRU, not FIFO).
+    found: dict[int, array] = {}
     with _cache_lock:
-        missing = [i for i, k in enumerate(keys) if k not in _cache]
+        for i, key in enumerate(keys):
+            vector = _cache.get(key)
+            if vector is not None:
+                _cache.move_to_end(key)
+                found[i] = vector
+    missing = [i for i in range(len(keys)) if i not in found]
     if missing:
         from langchain_openai import OpenAIEmbeddings
 
         # The embedding model takes at most 8191 tokens per input.
         inputs = [truncate_tokens(texts[i], 8000) for i in missing]
-        model = OpenAIEmbeddings(model=get_settings().embedding_model, api_key=require_key())
+        settings = get_settings()
+        model = OpenAIEmbeddings(
+            model=settings.embedding_model,
+            api_key=require_key(),
+            request_timeout=settings.openai_timeout_s,
+            max_retries=1,
+        )
         # Small batches in parallel come back much faster than one big request,
         # which matters for the first question of a chat (nothing cached yet).
         batches = [inputs[i : i + _EMBED_BATCH] for i in range(0, len(inputs), _EMBED_BATCH)]
@@ -127,15 +159,15 @@ def embed_texts(texts: list[str], usage: Usage) -> list[list[float]]:
         usage.embedding_tokens += sum(count_tokens(t) for t in inputs)
         with _cache_lock:
             for i, vector in zip(missing, vectors):
-                _cache[keys[i]] = vector
+                found[i] = array("f", vector)
+                _cache[keys[i]] = found[i]
                 _cache.move_to_end(keys[i])
             while len(_cache) > _CACHE_SIZE:
                 _cache.popitem(last=False)
-    with _cache_lock:
-        return [_cache[k] for k in keys]
+    return [found[i] for i in range(len(keys))]
 
 
-def cosine(a: list[float], b: list[float]) -> float:
+def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
     return dot / norm if norm else 0.0

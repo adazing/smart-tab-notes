@@ -182,9 +182,10 @@ def call_llm(messages: list[BaseMessage]) -> str:
     from app import llm
 
     usage = llm.Usage()
-    text = llm.complete(messages, usage)
-    usage.log("/explain")
-    return text
+    try:
+        return llm.complete(messages, usage)
+    finally:
+        usage.log("/explain")  # also when the call fails
 
 
 def llm_node(state: ExplainState) -> ExplainState:

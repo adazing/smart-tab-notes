@@ -1,10 +1,11 @@
 import json
 import logging
 import time
-from collections.abc import Iterator
+import threading
+from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
-from fastapi.concurrency import run_in_threadpool
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -75,24 +76,33 @@ def _require_key() -> None:
 
 
 @app.post("/chat")
-def chat(req: ChatRequest) -> StreamingResponse:
+async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     """Stream an answer as Server-Sent Events: `token`* then `done` (or `error`)."""
     _require_key()
 
-    def events() -> Iterator[str]:
+    async def events() -> AsyncIterator[str]:
         usage = llm.Usage()
+        cancel = threading.Event()
         started = time.perf_counter()
         first_token_ms: int | None = None
         final: dict = {}
+        outcome = "done"
+        graph_events = chat_graph.stream(
+            {
+                "messages": [m.model_dump() for m in req.messages],
+                "tabs": [t.model_dump() for t in req.tabs],
+                "usage": usage,
+                "cancel": cancel,
+            },
+            stream_mode=["custom", "values"],
+        )
         try:
-            for mode, chunk in chat_graph.stream(
-                {
-                    "messages": [m.model_dump() for m in req.messages],
-                    "tabs": [t.model_dump() for t in req.tabs],
-                    "usage": usage,
-                },
-                stream_mode=["custom", "values"],
-            ):
+            # The graph is synchronous; run it in a worker thread so the event
+            # loop stays free to notice the client disconnecting.
+            async for mode, chunk in iterate_in_threadpool(graph_events):
+                if await request.is_disconnected():
+                    outcome = "disconnected"
+                    return
                 if mode == "custom" and "token" in chunk:
                     if first_token_ms is None:
                         first_token_ms = round((time.perf_counter() - started) * 1000)
@@ -100,19 +110,25 @@ def chat(req: ChatRequest) -> StreamingResponse:
                 elif mode == "values":
                     final = chunk
         except Exception:
+            outcome = "error"
             logger.exception("/chat failed")
             yield _sse("error", {"detail": "The chat service failed. Try again."})
             return
+        finally:
+            # Stops answer_node after its current token if we left early
+            # (disconnect, error, or Starlette cancelling this generator).
+            cancel.set()
+            usage.log(
+                "/chat",
+                outcome=outcome,
+                tabs=len(req.tabs),
+                sources=len(final.get("sources", [])),
+                retrieval=final.get("retrieval"),
+                first_token_ms=first_token_ms,
+                total_ms=round((time.perf_counter() - started) * 1000),
+            )
 
         total_ms = round((time.perf_counter() - started) * 1000)
-        usage.log(
-            "/chat",
-            tabs=len(req.tabs),
-            sources=len(final.get("sources", [])),
-            retrieval=final.get("retrieval"),
-            first_token_ms=first_token_ms,
-            total_ms=total_ms,
-        )
         yield _sse(
             "done",
             {
@@ -143,5 +159,6 @@ async def rank_tabs_endpoint(req: RankTabsRequest) -> RankTabsResponse:
     except Exception as exc:
         logger.exception("/rank-tabs failed")
         raise HTTPException(status_code=502, detail="Tab ranking failed. Try again.") from exc
-    usage.log("/rank-tabs", tabs=len(req.tabs))
+    finally:
+        usage.log("/rank-tabs", tabs=len(req.tabs))
     return RankTabsResponse(scores=scores)

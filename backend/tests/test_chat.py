@@ -34,7 +34,7 @@ class FakeChat:
         self.answer = answer  # a string, or a function of the system prompt
         self.prompts = []
 
-    def __call__(self, messages, usage):
+    def __call__(self, messages, usage, cancel=None):
         self.prompts.append(messages)
         usage.add_chat({"input_tokens": 1200, "output_tokens": 45})
         answer = self.answer(messages[0].content) if callable(self.answer) else self.answer
@@ -178,7 +178,7 @@ def test_sends_conversation_history_and_uses_it_for_short_follow_ups(monkeypatch
 
 
 def test_model_failure_mid_stream_sends_an_error_event(monkeypatch):
-    def broken(messages, usage):
+    def broken(messages, usage, cancel=None):
         yield "Partial "
         raise RuntimeError("upstream timeout")
 
