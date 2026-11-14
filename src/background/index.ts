@@ -94,6 +94,9 @@ async function getActiveTabRef(): Promise<TabRef | null> {
  * ------------------------------------------------------------------ */
 
 registerHandlers('background', {
+  // No logging or persistence of selected text, questions, or notes in Week 1.
+  'toolbar:action': async () => ({ ok: true }),
+
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
   'tabs:list': async ({ currentWindowOnly }) => {

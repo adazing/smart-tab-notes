@@ -6,10 +6,11 @@
  * the user has deliberately selected. That matches the PRD decision that
  * tabs are never read silently.
  *
- * The highlight popup, the pinned annotations and the real W3C anchoring
- * get built on top of this.
+ * The selection toolbar is installed below. Persistent annotations and
+ * robust W3C anchoring are separate tickets.
  */
 
+import { installSelectionToolbar } from './toolbar';
 import { registerHandlers, notify } from '../shared/messages';
 import type { PageContext, SelectionInfo } from '../shared/types';
 
@@ -111,3 +112,5 @@ function onSelectionChange(): void {
 document.addEventListener('selectionchange', onSelectionChange);
 
 console.debug(LOG, 'ready on', location.href);
+
+installSelectionToolbar();
