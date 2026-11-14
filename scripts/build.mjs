@@ -14,6 +14,7 @@ const watch = process.argv.includes('--watch');
 const configs = [
   { configFile: 'vite.config.ts', label: 'sidepanel + background' },
   { configFile: 'vite.content.config.ts', label: 'content script' },
+  { configFile: 'vite.extract.config.ts', label: 'page extractor' },
 ];
 
 for (const { configFile, label } of configs) {

@@ -38,19 +38,25 @@ for (const icon of Object.values(manifest.action?.default_icon ?? {})) {
   requireFile(icon, 'action icon');
 }
 
-// A content script is injected as a classic script, so it must not have
-// been split into ES-module chunks by the bundler.
-for (const script of manifest.content_scripts ?? []) {
-  for (const file of script.js ?? []) {
-    const full = resolve(DIST, file);
-    if (!existsSync(full)) continue;
-    const source = readFileSync(full, 'utf8');
-    if (/(^|\n)\s*import\s/.test(source) || /(^|\n)\s*export\s/.test(source)) {
-      problems.push(
-        `${file} contains import/export. Content scripts cannot be ES modules -- ` +
-          'it must be built by vite.content.config.ts in iife format.',
-      );
-    }
+// Injected on demand by shared/tabContext.ts, so the manifest does not list it.
+const INJECTED_SCRIPTS = ['extract.js'];
+for (const file of INJECTED_SCRIPTS) requireFile(file, 'injected script');
+
+// Content scripts and injected scripts run as classic scripts, so they must
+// not have been split into ES-module chunks by the bundler.
+const classicScripts = [
+  ...(manifest.content_scripts ?? []).flatMap((script) => script.js ?? []),
+  ...INJECTED_SCRIPTS,
+];
+for (const file of classicScripts) {
+  const full = resolve(DIST, file);
+  if (!existsSync(full)) continue;
+  const source = readFileSync(full, 'utf8');
+  if (/(^|\n)\s*import\s/.test(source) || /(^|\n)\s*export\s/.test(source)) {
+    problems.push(
+      `${file} contains import/export. Content and injected scripts cannot be ES modules -- ` +
+        'build them in iife format (see vite.content.config.ts).',
+    );
   }
 }
 
