@@ -24,7 +24,7 @@ rebuild click reload on the extension card and reload any open tab you're testin
 | `npm run build` | Typecheck, build into `dist/`, check it's loadable |
 | `npm run dev` | Rebuild on change |
 | `npm test` | Unit tests (Vitest) |
-| `npm run test:browser` | Toolbar test in a real Chromium (run `npx playwright install chromium` once) |
+| `npm run test:browser` | Build, then toolbar and extractor tests in a real Chromium (run `npx playwright install chromium` once) |
 | `npm run test:sites` | Run the page extractor on 10 real sites |
 
 ## Layout
@@ -53,7 +53,7 @@ Add a row when you add a message to `MessageContracts` in
 | `tabs:getActive` | side panel → background | `{ windowId? }` | `{ tab }` |
 | `tabs:focus` | side panel → background | `{ tabId }` | `Ack` |
 | `tabs:changed` | background → side panels | `{ activeTabId, windowId }` | `Ack` |
-| `page:getContext` | side panel → content | `{ includeText?, maxChars? }` | `PageContext` |
+| `page:getContext` | side panel → content | `{}` | `{ url, title, selection }` (for page text use `tabs:getContext`) |
 | `page:getSelection` | side panel → content | `{}` | `{ selection }` |
 | `page:selectionChanged` | content → background → side panels | `{ selection, tabId?, windowId? }` | `Ack` |
 | `toolbar:action` | content → background | `{ action, text, url, question?, note? }` | `Ack` |
