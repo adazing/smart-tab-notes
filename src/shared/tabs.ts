@@ -13,7 +13,8 @@ const LOG = '[smart-tab-notes:tabs]';
 /** Pages we are not allowed to inject into, so there is no content script. */
 export function isAccessible(url: string | undefined): boolean {
   if (!url) return false;
-  if (!/^(https?|file):/.test(url)) return false;
+  // file:// pages need host permission the manifest does not request.
+  if (!/^https?:/.test(url)) return false;
   // Chrome blocks extensions on its own web properties.
   if (url.startsWith('https://chrome.google.com/webstore')) return false;
   if (url.startsWith('https://chromewebstore.google.com')) return false;

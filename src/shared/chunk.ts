@@ -29,7 +29,10 @@ export function estimateTokens(text: string): number {
 export function splitLongText(text: string, maxChars: number): string[] {
   if (text.length <= maxChars) return [text];
 
-  const sentences = text.match(/[^.!?]+(?:[.!?]+["')\]]*\s*|$)/g) ?? [text];
+  // Every character lands in exactly one piece: a run ending in sentence
+  // punctuation (which may itself start with punctuation, as in ".NET"), or
+  // the unpunctuated tail.
+  const sentences = text.match(/[^.!?]*[.!?]+["')\]]*\s*|[^.!?]+$/g) ?? [text];
   const pieces: string[] = [];
   let current = '';
 
@@ -57,6 +60,15 @@ export function splitLongText(text: string, maxChars: number): string[] {
   }
   if (current.trim()) pieces.push(current.trim());
   return pieces;
+}
+
+const MAX_LABEL_HEADINGS = 3;
+
+function joinHeadings(label: string, heading: string): string {
+  if (!label) return heading;
+  const parts = label.split(' · ');
+  if (parts.at(-1) === '…' || parts.includes(heading)) return label;
+  return parts.length >= MAX_LABEL_HEADINGS ? `${label} · …` : `${label} · ${heading}`;
 }
 
 export function chunkBlocks(
@@ -96,8 +108,10 @@ export function chunkBlocks(
     if (block.kind === 'heading') {
       if (size / CHARS_PER_TOKEN >= minTokens) flush();
       heading = text;
-      // A heading at the very start of a chunk labels it; keep it in the text too.
+      // A heading at the very start of a chunk labels it. A small section merged
+      // into the current chunk adds its heading to the label (up to three).
       if (parts.length === 0) chunkHeading = heading;
+      else chunkHeading = joinHeadings(chunkHeading, heading);
       parts.push(text);
       size += text.length + 2;
       continue;

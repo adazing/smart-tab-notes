@@ -11,7 +11,13 @@
  * chrome.storage, not in module variables.
  */
 
-import { registerHandlers, notify } from '../shared/messages';
+import {
+  notify,
+  registerHandlers,
+  type MessageHandler,
+  type MessageKind,
+} from '../shared/messages';
+import { isFromExtensionPage, isFromTab } from '../shared/senders';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
 
@@ -37,26 +43,51 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Sender checks
+ * ------------------------------------------------------------------ */
+
+const EXTENSION_ORIGIN = chrome.runtime.getURL('');
+
+/**
+ * Only answer `kind` for extension pages (the side panel). Content scripts run
+ * inside web pages, so they must not be able to read other tabs or move focus.
+ * A rejected sender gets no response (its send resolves to ok: false).
+ */
+function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHandler<K>): MessageHandler<K> {
+  return (payload, sender) => {
+    if (!isFromExtensionPage(sender, EXTENSION_ORIGIN)) {
+      throw new Error(`"${kind}" is only answered for extension pages, not ${sender.url ?? 'unknown sender'}`);
+    }
+    return handler(payload, sender);
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Message handlers
  * ------------------------------------------------------------------ */
 
 registerHandlers('background', {
   // No logging or persistence of selected text, questions, or notes in Week 1.
-  'toolbar:action': async () => ({ ok: true }),
+  'toolbar:action': async (_payload, sender) =>
+    isFromTab(sender, EXTENSION_ORIGIN) ? { ok: true } : { ok: false, reason: 'not from a tab' },
 
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
-  'tabs:list': async ({ currentWindowOnly }) => {
+  'tabs:list': extensionPagesOnly('tabs:list', async ({ currentWindowOnly }) => {
     const tabs = await listTabs({ currentWindowOnly });
     return { tabs, groups: await listTabGroups(tabs) };
-  },
+  }),
 
   /** Readable text and ~500-token chunks for the given tabs, in order. */
-  'tabs:getContext': async ({ tabIds }) => ({ contexts: await getTabContext(tabIds) }),
+  'tabs:getContext': extensionPagesOnly('tabs:getContext', async ({ tabIds }) => ({
+    contexts: await getTabContext(tabIds),
+  })),
 
-  'tabs:getActive': async ({ windowId }) => ({ tab: await getActiveTabRef(windowId) }),
+  'tabs:getActive': extensionPagesOnly('tabs:getActive', async ({ windowId }) => ({
+    tab: await getActiveTabRef(windowId),
+  })),
 
-  'tabs:focus': async ({ tabId }) => {
+  'tabs:focus': extensionPagesOnly('tabs:focus', async ({ tabId }) => {
     try {
       const tab = await chrome.tabs.update(tabId, { active: true });
       if (tab?.windowId !== undefined) {
@@ -66,7 +97,7 @@ registerHandlers('background', {
     } catch (error) {
       return { ok: false, reason: String(error) };
     }
-  },
+  }),
 
   /**
    * Content scripts report selections here rather than straight to the side
@@ -76,7 +107,9 @@ registerHandlers('background', {
    */
   'page:selectionChanged': async ({ selection }, sender) => {
     // Only content scripts in a tab report selections; drop anything else.
-    if (sender.tab?.id === undefined) return { ok: false, reason: 'not from a tab' };
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || sender.tab?.id === undefined) {
+      return { ok: false, reason: 'not from a tab' };
+    }
     await notify('sidepanel', 'page:selectionChanged', {
       selection,
       tabId: sender.tab.id,

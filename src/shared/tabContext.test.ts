@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getTabContext } from './tabContext';
+import { getTabContext, runExtractor } from './tabContext';
 import type { ExtractedPage } from './types';
 
 type FakeTab = Partial<chrome.tabs.Tab> & { id: number };
@@ -96,14 +96,20 @@ describe('getTabContext', () => {
   });
 
   it('reports closed tabs and injection failures as errors instead of throwing', async () => {
-    tabs[2] = tab(2, 'file:///Users/me/notes.html');
-    pageResults[2] = new Error('Cannot access contents of url "file:///Users/me/notes.html".');
+    tabs[2] = tab(2, 'https://example.com/broken');
+    pageResults[2] = new Error('Frame with ID 0 is showing error page');
 
     const [closed, blocked] = await getTabContext([99, 2]);
 
     expect(closed).toMatchObject({ tabId: 99, status: 'error', error: 'No tab with id: 99.' });
     expect(blocked).toMatchObject({ tabId: 2, status: 'error', loaded: true });
-    expect(blocked!.error).toContain('Cannot access');
+    expect(blocked!.error).toContain('error page');
+  });
+
+  it('reports local files as restricted: the extension has no file:// permission', async () => {
+    tabs[1] = tab(1, 'file:///Users/me/notes.html');
+    expect((await getTabContext([1]))[0]!.status).toBe('restricted');
+    expect(executeScript).not.toHaveBeenCalled();
   });
 
   it('returns results in the order the ids were given', async () => {
@@ -112,5 +118,26 @@ describe('getTabContext', () => {
     pageResults[2] = { contentType: 'text/html', page: article };
     const contexts = await getTabContext([2, 1]);
     expect(contexts.map((c) => c.tabId)).toEqual([2, 1]);
+  });
+});
+
+describe('runExtractor (the function injected into the page)', () => {
+  it('returns no page for a PDF, without needing extract.js', () => {
+    vi.stubGlobal('document', { contentType: 'application/pdf' });
+    expect(runExtractor(1000)).toEqual({ contentType: 'application/pdf', page: null });
+  });
+
+  it('throws when extract.js did not load', () => {
+    vi.stubGlobal('document', { contentType: 'text/html' });
+    expect(() => runExtractor(1000)).toThrow('extract.js did not load');
+  });
+
+  it('calls the injected extractor with the size cap', () => {
+    const doc = { contentType: 'text/html' };
+    const extractPage = vi.fn(() => article);
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('SmartTabNotesExtract', { extractPage });
+    expect(runExtractor(1234)).toEqual({ contentType: 'text/html', page: article });
+    expect(extractPage).toHaveBeenCalledWith(doc, { maxChars: 1234 });
   });
 });

@@ -32,8 +32,13 @@ describe('chunkBlocks', () => {
     const blocks = [h('One'), p('Short.'), h('Two'), p('Also short.'), h('Three'), p('Tiny.')];
     const chunks = chunkBlocks(blocks, 1);
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]!.heading).toBe('One');
+    expect(chunks[0]!.heading).toBe('One · Two · Three');
     expect(chunks[0]!.text).toContain('Three');
+  });
+
+  it('caps a merged label at three headings', () => {
+    const blocks = ['A', 'B', 'C', 'D', 'E'].flatMap((name) => [h(name), p('Tiny.')]);
+    expect(chunkBlocks(blocks, 1)[0]!.heading).toBe('A · B · C · …');
   });
 
   it('starts a new chunk at a heading once the current one is big enough', () => {
@@ -60,6 +65,19 @@ describe('splitLongText', () => {
 
     const noPunctuation = 'word '.repeat(1000).trim();
     for (const piece of splitLongText(noPunctuation, 300)) expect(piece.length).toBeLessThanOrEqual(300);
+  });
+
+  it('never drops characters, including punctuation that starts a piece', () => {
+    const squash = (s: string): string => s.replace(/\s+/g, '');
+    for (const text of [
+      '.NET is fine. ' + 'word '.repeat(600),
+      'Hello world. . . and ' + 'more text without any punctuation '.repeat(80),
+      '?! Odd start. "Quoted." (Paren.) ' + 'x'.repeat(5000),
+    ]) {
+      const pieces = splitLongText(text, 300);
+      expect(squash(pieces.join(''))).toBe(squash(text));
+      for (const piece of pieces) expect(piece.length).toBeLessThanOrEqual(300);
+    }
   });
 
   it('estimates tokens as chars / 4', () => {

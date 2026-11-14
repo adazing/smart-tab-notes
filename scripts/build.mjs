@@ -7,9 +7,16 @@
  * The main build must go first: it empties dist/ and copies public/.
  * The content-script build then adds dist/content.js alongside it.
  */
+import { rmSync } from 'node:fs';
 import { build } from 'vite';
 
 const watch = process.argv.includes('--watch');
+
+// In watch mode the three builds run side by side and rebuild independently.
+// If the main build emptied dist/ on each rebuild, it would delete content.js
+// and extract.js, which only rebuild when their own sources change. So empty
+// dist/ once up front and never again.
+if (watch) rmSync('dist', { recursive: true, force: true });
 
 const configs = [
   { configFile: 'vite.config.ts', label: 'sidepanel + background' },
@@ -21,7 +28,7 @@ for (const { configFile, label } of configs) {
   process.stdout.write(`\n[smart-tab-notes] building ${label}...\n`);
   await build({
     configFile,
-    build: watch ? { watch: {} } : {},
+    build: watch ? { watch: {}, emptyOutDir: false } : {},
   });
 }
 
