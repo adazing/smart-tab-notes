@@ -1,3 +1,5 @@
+import { normalizeUrl } from '../shared/normalize-url';
+import { canReadUrl, watchPagePrivacy } from '../shared/privacy';
 /**
  * Content script. Runs in every http(s)/file page.
  *
@@ -34,7 +36,11 @@ const DEFAULT_MAX_CHARS = 20_000;
  * that survives a changed page; until then it is enough to prove the
  * message bus carries real data.
  */
+let allowed = false;
+watchPagePrivacy(value => { allowed = value; });
+
 function describeSelection(): SelectionInfo | null {
+  if (!allowed) return null;
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
 
@@ -79,12 +85,20 @@ function readPageContext(includeText: boolean, maxChars: number): PageContext {
  * ------------------------------------------------------------------ */
 
 registerHandlers('content', {
+  'data:cleared': async ({ url }) => {
+    if (!url || normalizeUrl(location.href) === url) installSelectionToolbar();
+    return { ok: true };
+  },
   'ping': async () => ({ ok: true, endpoint: 'content', at: Date.now() }),
 
-  'page:getContext': async ({ includeText = false, maxChars = DEFAULT_MAX_CHARS }) =>
-    readPageContext(includeText, maxChars),
+  'page:getContext': async ({ includeText = false, maxChars = DEFAULT_MAX_CHARS }) => {
+    if (!await canReadUrl(location.href)) throw new Error('Reading is disabled.');
+    const context = readPageContext(includeText, maxChars);
+    if (context.url !== location.href || !await canReadUrl(location.href)) throw new Error('Reading is disabled.');
+    return context;
+  },
 
-  'page:getSelection': async () => ({ selection: describeSelection() }),
+  'page:getSelection': async () => ({ selection: await canReadUrl(location.href) ? describeSelection() : null }),
 });
 
 /* ------------------------------------------------------------------ *
@@ -101,6 +115,7 @@ let lastReported: string | null = null;
 function onSelectionChange(): void {
   window.clearTimeout(selectionTimer);
   selectionTimer = window.setTimeout(() => {
+    if (!allowed) return;
     const selection = describeSelection();
     const key = selection ? selection.text : null;
     if (key === lastReported) return;
@@ -111,6 +126,6 @@ function onSelectionChange(): void {
 
 document.addEventListener('selectionchange', onSelectionChange);
 
-console.debug(LOG, 'ready on', location.href);
+console.debug(LOG, 'ready');
 
 installSelectionToolbar();

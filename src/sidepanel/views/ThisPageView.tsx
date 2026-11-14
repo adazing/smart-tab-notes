@@ -24,7 +24,7 @@ const EXTRACTOR_LABELS: Record<NonNullable<TabContext['extractor']>, string> = {
 const STATUS_LABELS: Record<TabContext['status'], string> = {
   ok: 'Extracted',
   not_loaded: 'Tab not loaded yet. Visit it, then try again.',
-  restricted: 'Chrome does not let extensions read this page.',
+  restricted: 'Reading this page is disabled by privacy settings or Chrome.',
   pdf: 'PDFs are not supported yet.',
   error: 'Could not read this page.',
 };

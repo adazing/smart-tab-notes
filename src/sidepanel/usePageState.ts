@@ -1,3 +1,4 @@
+import { subscribePrivacy } from '../shared/privacy';
 /**
  * Keeps the side panel in step with whatever tab the user is looking at.
  *
@@ -26,12 +27,15 @@ export function usePageState(): PageState {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(() => {
+    setSelection(null);
     setLoading(true);
     void sendToBackground('tabs:getActive', {}).then((result) => {
       setActiveTab(result.ok ? result.data.tab : null);
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => subscribePrivacy(() => { setSelection(null); refresh(); }), [refresh]);
 
   // Initial load, and tell the worker we are open.
   useEffect(() => {

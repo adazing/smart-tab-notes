@@ -312,8 +312,6 @@ Called out so nobody assumes they are handled:
   characters either side, which is the shape of a W3C TextQuoteSelector but not
   a real implementation — it finds the first match of the text within its
   containing element. The anchoring ticket replaces it.
-- **No blocked-site list.** The PRD calls for users to block sensitive sites
-  (banking, email, health); there is no mechanism for it yet.
 - **No PDF support.** Chrome's built-in viewer does not accept content scripts;
   this is still an open question in the PRD. `getTabContext` reports PDFs as
   `status: 'pdf'` instead of failing.
@@ -482,3 +480,80 @@ Known gaps for later tickets: annotations have no anchoring fields (quote, prefi
 ## Backend
 
 The Python backend (FastAPI + LangGraph) is in [backend/](backend/README.md). API request and response shapes are in [docs/api.md](docs/api.md).
+
+
+## Settings and privacy (Ticket #10)
+
+Open the side panel and choose **Settings**. First-time users see privacy information
+and must choose **Continue** before selections, toolbar actions, or page extraction
+are enabled. Reopen that information from Settings. The current frontend has no AI
+requests; the separate backend is not connected. After onboarding, selections and
+nearby words are automatically reported to the panel when users select text on
+allowed pages. Page text is otherwise read on request.
+
+The starter blocked domains are `mail.google.com`, `outlook.live.com`,
+`outlook.office.com`, `mail.yahoo.com`, `chase.com`, `bankofamerica.com`,
+`wellsfargo.com`, `capitalone.com`, and `citi.com`. This list is not exhaustive.
+Add a hostname or HTTP(S) URL, or remove any entry. Entries are lowercase, omit
+`www.`, and match exact hosts and subdomains using hostname boundaries:
+`chase.com` blocks `secure.chase.com`, but allows `notchase.com`. Ports, paths,
+queries and fragments do not affect matching. Invalid and duplicate entries
+are rejected. Settings are saved only after persistence succeeds.
+
+`shared/privacy.ts` owns validation, matching, `getPrivacySettings()`,
+`isBlockedUrl()` and the onboarding-aware `canReadUrl()`. One `privacySettings`
+record in `chrome.storage.local` contains `blockedDomains` and
+`onboardingComplete`. Install initializes defaults; updates preserve customization,
+including intentionally removed default domains. Missing settings supply defaults
+and disable reading until onboarding completes; corrupt or unavailable settings
+fail closed. Background mutations are serialized to avoid lost updates.
+`chrome.storage.onChanged` refreshes panels and dismisses blocked toolbars.
+
+`getTabContext()` checks before script injection, again before extraction and
+before returning content, including a final check after mixed-tab requests finish.
+The injected extractor checks its actual current URL before reading the DOM;
+closed/navigated tabs and newly blocked content are discarded. The content
+handlers, outgoing selection/action messages and background action/selection
+handlers also enforce privacy. No page text is logged or cached for AI.
+`listTabs()` filters blocked tabs and `listTabGroups()` includes only eligible
+members. There is no tab picker or selected-tab state yet: its future consumer
+must subscribe with `subscribePrivacy()`, reload `tabs:list`, intersect its
+selected IDs with returned IDs, and show an empty state when none remain.
+Always use `tabs:getContext` for context even for directly supplied IDs.
+
+**Clear This Page's Notes** captures the active page URL when opening the in-panel
+confirmation. Confirmation permanently deletes only that normalized page's
+annotations, including soft-deleted notes/highlights; pages, summaries and
+collections remain. The URL is shown so a later tab switch cannot change the
+deletion target. Unsupported pages display an error and pages with no notes
+report that nothing was found.
+
+**Clear All Data** requires a separate in-panel confirmation and permanently
+clears all four Dexie tables (pages, annotations, chat summaries and collections),
+including tombstones. Both operations are transactions; failures roll back and
+show an error. Buttons are disabled while running. Blocklist preferences and
+onboarding status remain. There are no other persisted content caches or sync
+writers in this version. Deletion refreshes panel content and clears matching
+open pages' temporary toolbar highlights and note editors. The storage API is
+still not wired to toolbar saves (Ticket #6); use seeded database records to
+exercise saved-note deletion. Future sync or queued-writer implementations must
+honor explicit privacy deletion and must not restore erased records.
+
+New typed bus messages: `privacy:update` (panel → background: add/remove a domain
+or complete onboarding; returns persisted settings), and `data:cleared`
+(panel → background → panel/content: invalidate displayed content, optionally for
+one normalized URL). The existing bus and database are reused.
+
+Run `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:browser`.
+Unit tests cover privacy, extraction races, tab/group filtering, toolbar changes,
+physical deletion/rollback, confirmation/cancel/error states and onboarding.
+Browser tests load the packaged extension, complete onboarding, exercise toolbar
+actions, and verify settings persistence, blocked extraction and toolbar dismissal.
+The five external-site tests remain opt-in (`TOOLBAR_LIVE_SITES=1`). No lint script
+is configured. No PRD is present; settings preservation is the explicit policy here.
+
+Sunday demo: load `dist/` as an unpacked extension in a fresh Chrome profile;
+open the panel and Continue. In Settings, show defaults and add an open demo
+site, verify its toolbar disappears and extraction returns no text, then remove
+it and select text again. Reopen the panel to show persistence; demonstrate
+Cancel and confirmation for both deletion actions, and reopen Privacy information.

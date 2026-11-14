@@ -4,6 +4,9 @@ import { installSelectionToolbar } from './toolbar';
 import { captureSelection, toolbarPosition } from './selection';
 import { sendToBackground } from '../shared/messages';
 
+let privacyChanged: (allowed: boolean) => void;
+vi.mock('../shared/privacy', () => ({ watchPagePrivacy: vi.fn((callback: (allowed: boolean) => void) => { privacyChanged = callback; callback(true); return () => {}; }) }));
+
 vi.mock('../shared/messages', () => ({ sendToBackground: vi.fn(async () => ({ ok: true, data: { ok: true } })) }));
 
 let dispose: () => void;
@@ -159,4 +162,17 @@ describe('positioning', () => {
     expect(toolbarPosition(rectangle, 130, 40, { width: 150, height: 150, left: 20, top: 10 }))
       .toEqual({ left: 32, top: 52 });
   });
+});
+
+it('dismisses toolbar and prevents actions when blocked, and re-enables after unblock', () => {
+  select(); click('Highlight');
+  privacyChanged(false);
+  expect(panel().hidden).toBe(true);
+  expect(root().querySelectorAll('.highlight')).toHaveLength(0);
+  vi.mocked(sendToBackground).mockClear();
+  select(); click('Explain'); click('Highlight');
+  expect(panel().hidden).toBe(true);
+  expect(sendToBackground).not.toHaveBeenCalled();
+  privacyChanged(true); select();
+  expect(panel().hidden).toBe(false);
 });

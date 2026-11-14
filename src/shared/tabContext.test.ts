@@ -20,8 +20,10 @@ const article: ExtractedPage = {
 let tabs: Record<number, FakeTab>;
 let pageResults: Record<number, { contentType: string; page: ExtractedPage | null } | Error>;
 const executeScript = vi.fn();
+const storageGet = vi.fn<() => Promise<Record<string, unknown>>>();
 
 beforeEach(() => {
+  storageGet.mockReset().mockResolvedValue({ privacySettings: { blockedDomains: ['chase.com'], onboardingComplete: true } });
   tabs = {};
   pageResults = {};
   executeScript.mockReset();
@@ -31,6 +33,7 @@ beforeEach(() => {
     return injection.files ? [{ result: undefined }] : [{ result }];
   });
   vi.stubGlobal('chrome', {
+    storage: { local: { get: storageGet } },
     tabs: {
       get: vi.fn(async (id: number) => {
         const tab = tabs[id];
@@ -113,4 +116,27 @@ describe('getTabContext', () => {
     const contexts = await getTabContext([2, 1]);
     expect(contexts.map((c) => c.tabId)).toEqual([2, 1]);
   });
+});
+
+it('rejects direct blocked IDs in mixed requests without injection', async () => {
+  tabs[1] = tab(1, 'https://secure.chase.com');
+  tabs[2] = tab(2, 'https://example.com/a');
+  pageResults[2] = { contentType: 'text/html', page: article };
+  const result = await getTabContext([1, 2]);
+  expect(result.map(context => context.status)).toEqual(['restricted', 'ok']);
+  expect(executeScript.mock.calls.every(([injection]) => injection.target.tabId === 2)).toBe(true);
+});
+it('discards content when blocked while extraction is running', async () => {
+  tabs[1] = tab(1, 'https://example.com/a');
+  executeScript.mockImplementation(async (injection: { files?: string[] }) => {
+    if (!injection.files) storageGet.mockResolvedValue({ privacySettings: { blockedDomains: ['example.com'], onboardingComplete: true } });
+    return [{ result: injection.files ? undefined : { contentType: 'text/html', page: article } }];
+  });
+  expect((await getTabContext([1]))[0]).toMatchObject({ status: 'restricted', text: '', chunks: [] });
+});
+it('gates extraction before onboarding completion', async () => {
+  tabs[1] = tab(1, 'https://example.com/a');
+  storageGet.mockResolvedValue({});
+  expect((await getTabContext([1]))[0]?.status).toBe('restricted');
+  expect(executeScript).not.toHaveBeenCalled();
 });

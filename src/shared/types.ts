@@ -5,11 +5,12 @@
  */
 
 /** The three top-level views in the side panel. */
-export type SidePanelView = 'chat' | 'page' | 'library';
+export type SidePanelView = 'chat' | 'page' | 'library' | 'settings';
 
-export const SIDE_PANEL_VIEWS: readonly SidePanelView[] = ['chat', 'page', 'library'] as const;
+export const SIDE_PANEL_VIEWS: readonly SidePanelView[] = ['chat', 'page', 'library', 'settings'] as const;
 
 export const SIDE_PANEL_VIEW_LABELS: Record<SidePanelView, string> = {
+  settings: 'Settings',
   chat: 'Chat',
   page: 'This page',
   library: 'Library',
