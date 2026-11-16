@@ -1,5 +1,8 @@
 """Explain agent: build_context -> llm_node -> cite_node.
 
+With a `question` (the toolbar's Ask) the same graph answers that question
+about the selection instead of explaining it.
+
 The LLM is asked to tag sentences that use another tab with [tab:ID]. cite_node
 collects those markers (keeping only ids that were actually sent as context),
 returns them as used_tab_ids, and strips them from the explanation text.
@@ -121,6 +124,8 @@ class ExplainState(TypedDict, total=False):
     selected_text: str
     page_text: str
     other_tabs: list[TabContext]
+    # The reader's question about the selection (Ask), or None to explain it.
+    question: str | None
     # build_context
     page_context: str
     tab_contexts: list[TabContext]
@@ -138,7 +143,7 @@ def build_context(state: ExplainState) -> ExplainState:
 
     # Rank other tabs by keyword overlap with the selection + surrounding page text,
     # then fill the tabs budget with the most relevant ones.
-    query = _keywords(selection) | _keywords(page_context)
+    query = _keywords(selection) | _keywords(page_context) | _keywords(state.get("question") or "")
     tabs = [t for t in state.get("other_tabs", []) if t.get("text", "").strip()]
     tabs.sort(key=lambda t: len(query & _keywords(t["title"] + " " + t["text"])), reverse=True)
 
@@ -162,6 +167,17 @@ when they genuinely help. When a sentence draws on another tab, end that sentenc
 with its marker, e.g. [tab:42]. Never invent tab markers, and do not mark sentences \
 that only use the current page."""
 
+QUESTION_PROMPT = """You answer a reader's question about highlighted text from a web page.
+Answer the question in plain language in 2 to 4 sentences, focused on the highlighted \
+text. Avoid jargon; if you must use a term, define it. If the page and tabs don't \
+contain the answer, say so briefly, then give your best general answer.
+Use the surrounding page text for context. You may also use the other open tabs \
+when they genuinely help. When a sentence draws on another tab, end that sentence \
+with its marker, e.g. [tab:42]. Never invent tab markers, and do not mark sentences \
+that only use the current page."""
+
+QUESTION_TOKEN_BUDGET = 300
+
 
 def build_messages(state: ExplainState) -> list[BaseMessage]:
     selected = truncate_tokens(state["selected_text"], get_settings().selection_token_budget)
@@ -174,6 +190,10 @@ def build_messages(state: ExplainState) -> list[BaseMessage]:
             f"[tab:{t['tab_id']}] {t['title'][:200]} ({t['url'][:300]})\n{t['text']}" for t in state["tab_contexts"]
         )
         parts.append(f"Other open tabs:\n{tabs}")
+    question = state.get("question")
+    if question:
+        parts.append(f"Reader's question:\n\"\"\"{truncate_tokens(question, QUESTION_TOKEN_BUDGET)}\"\"\"")
+        return [SystemMessage(QUESTION_PROMPT), HumanMessage("\n\n".join(parts))]
     return [SystemMessage(SYSTEM_PROMPT), HumanMessage("\n\n".join(parts))]
 
 

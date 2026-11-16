@@ -54,6 +54,7 @@ async def explain(req: ExplainRequest) -> ExplainResponse:
                 "selected_text": req.selected_text,
                 "page_text": req.page_text,
                 "other_tabs": [t.model_dump() for t in req.other_tabs],
+                "question": req.question,
             },
         )
     except MissingAPIKeyError as exc:

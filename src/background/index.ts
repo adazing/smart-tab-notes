@@ -6,6 +6,7 @@
  *   - answer tab queries for the side panel (it has no direct tabs access
  *     pattern we want to spread around; everything goes through here)
  *   - relay selection events from content scripts to the side panel
+ *   - toolbar Explain/Ask (explain.ts) and Save (annotations.ts)
  *
  * Remember this worker is torn down when idle. Keep state in
  * chrome.storage, not in module variables.
@@ -18,8 +19,11 @@ import {
   type MessageKind,
 } from '../shared/messages';
 import { isFromExtensionPage, isFromTab } from '../shared/senders';
+import { runExplain } from './explain';
+import { callerOf, deleteNote, listNotes, saveNote, setAnchorState, updateNote } from './notes';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
+import { FOCUSED_NOTE_KEY } from '../shared/types';
 
 const LOG = '[smart-tab-notes:bg]';
 
@@ -67,9 +71,11 @@ function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHand
  * ------------------------------------------------------------------ */
 
 registerHandlers('background', {
-  // No logging or persistence of selected text, questions, or notes in Week 1.
-  'toolbar:action': async (_payload, sender) =>
-    isFromTab(sender, EXTENSION_ORIGIN) ? { ok: true } : { ok: false, reason: 'not from a tab' },
+  /** Toolbar Explain and Ask. Reads the sender's tab and others in its window. */
+  'explain:run': async (payload, sender) => {
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || !sender.tab) return { ok: false, error: 'Not from a tab.' };
+    return runExplain(payload, sender.tab);
+  },
 
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
@@ -101,6 +107,56 @@ registerHandlers('background', {
       return { ok: false, reason: String(error) };
     }
   }),
+
+  /* ---------------------------------------------------------------- *
+   * Saved notes. The worker owns storage; content scripts ask for it.
+   * ---------------------------------------------------------------- */
+
+  // Saved notes (highlights). See notes.ts for who may touch which notes.
+  'annotations:save': async (payload, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? saveNote(payload, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
+
+  'annotations:list': async ({ url }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? listNotes(url, caller) : { annotations: [], reason: 'Unknown sender.' };
+  },
+
+  'annotations:update': async (payload, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? updateNote(payload, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
+
+  'annotations:delete': async ({ id }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? deleteNote(id, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
+
+  /**
+   * The user clicked a note's highlighted text: show that note in the side
+   * panel, opening the panel if it is closed.
+   */
+  'annotations:focus': async ({ id }, sender) => {
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || sender.tab?.id === undefined || typeof id !== 'string') {
+      return { ok: false, reason: 'not from a tab' };
+    }
+    const { id: tabId, windowId } = sender.tab;
+    // Before any await: opening the panel is only allowed while the click's
+    // user gesture is still live. If the browser says no, the card on the
+    // page still shows the note.
+    const opened = chrome.sidePanel.open({ windowId }).then(() => true, () => false);
+    // A panel that is only now opening misses the message below; it reads this.
+    await chrome.storage.session.set({ [FOCUSED_NOTE_KEY]: { id, tabId, windowId, at: Date.now() } }).catch(() => {});
+    await opened;
+    await notify('sidepanel', 'annotations:focused', { id, tabId, windowId });
+    return { ok: true };
+  },
+
+  'annotations:anchorState': async ({ id, orphaned }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? setAnchorState(id, orphaned, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
 
   /**
    * Content scripts report selections here rather than straight to the side

@@ -3,8 +3,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, StorageDatabase } from './database';
 import {
   addAnnotation, addChatSummary, createCollection, getPageByUrl, listAnnotations,
-  listChatSummaries, listCollections, normalizeUrl, savePage, softDelete, updateAnnotation,
+  listChatSummaries, listCollections, normalizeUrl, savePage, setAnnotationOrphaned,
+  softDelete, updateAnnotation,
 } from './storage';
+import type { AnnotationTarget } from './types';
+
+/** What the anchoring layer stores so a highlight can be found again. */
+const TARGET: AnnotationTarget = {
+  source: 'https://example.com/',
+  quote: { exact: 'all you need', prefix: 'Attention is ', suffix: '.' },
+  position: { start: 13, end: 25 },
+};
 
 beforeEach(async () => { await db.delete(); await db.open(); });
 afterEach(async () => { await db.delete(); });
@@ -78,6 +87,56 @@ describe('annotations', () => {
     await softDelete('annotations', annotation.id);
     expect(await listAnnotations(page.id)).toEqual([]);
     expect(await updateAnnotation(annotation.id, { text: 'No' })).toBeUndefined();
+  });
+
+  it('keeps the anchoring selectors and the explanation it was given', async () => {
+    const page = await savePage({ url: 'https://example.com', title: 'Example' });
+    const annotation = await addAnnotation({
+      pageId: page.id, text: 'all you need', target: TARGET, explanation: 'Why it matters.',
+    });
+    expect(annotation.target).toEqual(TARGET);
+    expect(annotation.orphaned).toBeUndefined();
+    expect((await listAnnotations(page.id))[0]).toEqual(annotation);
+
+    // Re-anchoring on a changed page replaces the selectors.
+    const moved = { ...TARGET, position: { start: 99, end: 111 } };
+    const updated = await updateAnnotation(annotation.id, { target: moved, explanation: undefined });
+    expect(updated).toMatchObject({ target: moved, explanation: undefined });
+  });
+
+  it('records whether a quote could be found, without touching updatedAt', async () => {
+    const page = await savePage({ url: 'https://example.com', title: 'Example' });
+    const annotation = await addAnnotation({ pageId: page.id, text: 'Quote', target: TARGET });
+
+    expect(await setAnnotationOrphaned(annotation.id, true)).toBe(true);
+    const orphaned = (await listAnnotations(page.id))[0]!;
+    expect(orphaned.orphaned).toBe(true);
+    // Derived from the page, not an edit by the user: order is left alone.
+    expect(orphaned.updatedAt).toBe(annotation.updatedAt);
+
+    expect(await setAnnotationOrphaned(annotation.id, false)).toBe(false);
+    expect((await listAnnotations(page.id))[0]!.orphaned).toBe(false);
+    expect(await setAnnotationOrphaned('missing', true)).toBeUndefined();
+    await softDelete('annotations', annotation.id);
+    expect(await setAnnotationOrphaned(annotation.id, true)).toBeUndefined();
+  });
+
+  it('stores the AI explanation, question and sources with a note', async () => {
+    const page = await savePage({ url: 'https://example.com', title: 'Example' });
+    const annotation = await addAnnotation({
+      pageId: page.id, text: 'Quote', note: 'Mine', explanation: 'It means X.', question: 'What?',
+      sources: [{ title: 'Other', url: 'https://other.example', tabId: 7 } as never],
+      id: 'tamper', deleted: true,
+    } as never);
+    expect(annotation).toMatchObject({
+      text: 'Quote', note: 'Mine', explanation: 'It means X.', question: 'What?',
+      sources: [{ title: 'Other', url: 'https://other.example' }], deleted: false,
+    });
+    expect(annotation.id).not.toBe('tamper');
+    expect(annotation.sources![0]).not.toHaveProperty('tabId');
+    expect(await listAnnotations(page.id)).toEqual([annotation]);
+    const bare = await addAnnotation({ pageId: page.id, text: 'Only a quote' });
+    expect(Object.keys(bare)).not.toContain('explanation');
   });
 
   it('rejects missing or deleted parent pages without inserting children', async () => {

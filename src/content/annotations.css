@@ -1,0 +1,20 @@
+:host { all: initial !important; position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; z-index: 2147483646 !important; pointer-events: none !important; color-scheme: light; }
+* { box-sizing: border-box; }
+.card { position: fixed; width: 320px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; pointer-events: auto; background: #fff; color: #1b1d21; border: 1px solid #d4d8e0; border-radius: 8px; box-shadow: 0 4px 20px #0003; font: 14px/1.5 system-ui, sans-serif; text-align: left; padding: 10px 12px; }
+[hidden] { display: none !important; }
+.quote { margin: 0 0 8px; padding-left: 8px; border-left: 3px solid #ffc940; font-style: italic; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
+h2 { font: 600 12px/1.4 system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #5c6473; margin: 10px 0 2px; }
+h2:first-of-type { margin-top: 0; }
+p { margin: 0; overflow-wrap: anywhere; }
+.muted { color: #5c6473; }
+.actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+button { appearance: none; border: 0; background: #e8efff; color: #1b1d21; border-radius: 5px; padding: 6px 10px; min-height: 32px; cursor: pointer; font: inherit; }
+button:hover { background: #d7e3ff; }
+button.quiet { background: #f1f2f5; }
+button:focus-visible, textarea:focus-visible { outline: 2px solid #2f6df6; outline-offset: -2px; }
+textarea { display: block; width: 100%; padding: 8px; border: 1px solid #89919d; border-radius: 4px; background: #fff; color: #1b1d21; font: inherit; resize: vertical; min-height: 72px; max-height: 160px; }
+.status { margin-top: 8px; color: #8a2b1f; }
+.question { font-weight: 600; margin-bottom: 4px; }
+.sources { margin-top: 6px; font-size: 12px; }
+.sources a { color: #2f6df6; }
+textarea::placeholder { color: #6a7076; }

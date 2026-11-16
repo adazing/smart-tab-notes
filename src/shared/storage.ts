@@ -50,13 +50,28 @@ export async function getPageByUrl(url: string): Promise<Page | undefined> {
 export async function addAnnotation(input: AnnotationInput): Promise<Annotation> {
   return await db.transaction('rw', db.pages, db.annotations, async () => {
     await requirePage(input.pageId);
-    const annotation: Annotation = {
-      pageId: input.pageId, text: input.text,
-      ...(input.note !== undefined ? { note: input.note } : {}), ...metadata(),
-    };
+    // Explicit allowlist, as in updateAnnotation: untyped callers can't set metadata.
+    const annotation: Annotation = { pageId: input.pageId, text: input.text, ...metadata() };
+    if (input.note !== undefined) annotation.note = input.note;
+    if (input.target !== undefined) annotation.target = input.target;
+    if (input.explanation !== undefined) annotation.explanation = input.explanation;
+    if (input.question !== undefined) annotation.question = input.question;
+    if (input.sources !== undefined) {
+      annotation.sources = input.sources.map(({ title, url }) => ({ title, url }));
+    }
     await db.annotations.add(annotation);
     return annotation;
   });
+}
+
+/** An active annotation and the page it belongs to, or `undefined`. */
+export async function getAnnotationWithPage(
+  id: string,
+): Promise<{ annotation: Annotation; page: Page } | undefined> {
+  const annotation = await db.annotations.get(id);
+  if (!annotation || annotation.deleted) return undefined;
+  const page = await db.pages.get(annotation.pageId);
+  return page ? { annotation, page } : undefined;
 }
 
 export async function listAnnotations(pageId: string): Promise<Annotation[]> {
@@ -74,8 +89,36 @@ export async function updateAnnotation(
     const annotation: Annotation = { ...existing, updatedAt: modifiedAt(existing) };
     if (changes.text !== undefined) annotation.text = changes.text;
     if (Object.hasOwn(changes, 'note')) annotation.note = changes.note;
+    if (Object.hasOwn(changes, 'target')) annotation.target = changes.target;
+    if (Object.hasOwn(changes, 'explanation')) annotation.explanation = changes.explanation;
+    if (Object.hasOwn(changes, 'question')) annotation.question = changes.question;
+    if (Object.hasOwn(changes, 'sources')) {
+      annotation.sources = changes.sources?.map(({ title, url }) => ({ title, url }));
+    }
     await db.annotations.put(annotation);
     return annotation;
+  });
+}
+
+/**
+ * Record whether the last visit to the page could place this note's quote.
+ *
+ * Unlike the functions above this one does not advance `updatedAt`: an
+ * anchoring result is derived from the page, not an edit by the user, and
+ * every page load would otherwise reshuffle "recently changed" lists. It
+ * writes nothing when the flag is already correct.
+ *
+ * Returns the stored value, or `undefined` for a missing or deleted note.
+ */
+export async function setAnnotationOrphaned(
+  id: string, orphaned: boolean,
+): Promise<boolean | undefined> {
+  return await db.transaction('rw', db.annotations, async () => {
+    const existing = await db.annotations.get(id);
+    if (!existing || existing.deleted) return undefined;
+    if ((existing.orphaned ?? false) === orphaned) return orphaned;
+    await db.annotations.put({ ...existing, orphaned });
+    return orphaned;
   });
 }
 
