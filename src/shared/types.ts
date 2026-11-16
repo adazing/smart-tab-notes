@@ -11,7 +11,7 @@ export const SIDE_PANEL_VIEWS: readonly SidePanelView[] = ['chat', 'page', 'libr
 
 export const SIDE_PANEL_VIEW_LABELS: Record<SidePanelView, string> = {
   chat: 'Chat',
-  page: 'This page',
+  page: 'Notes',
   library: 'Library',
 };
 
@@ -148,16 +148,30 @@ export interface Ack {
 /** Payload for messages that take no arguments. */
 export type Empty = Record<string, never>;
 
-/**
- * Toolbar actions that are still Week 1 acknowledgements. They carry a
- * snapshot of the selection, never a later browser selection.
- *
- * Highlight and Note are not here: they save real notes through the
- * `annotations:*` messages instead.
- */
-export type ToolbarAction =
-  | { action: 'explain'; text: string; url: string }
-  | { action: 'ask'; text: string; url: string; question: string };
+/* ------------------------------------------------------------------ *
+ * Explain and Ask (toolbar -> background)
+ * ------------------------------------------------------------------ */
+
+/** Explain the selection, or answer `question` about it, for the sender's tab. */
+export interface ExplainRun {
+  text: string;
+  /** The page the text was selected on. The worker refuses if the tab has moved on. */
+  url: string;
+  /** Ask: the user's question. Omit to explain. */
+  question?: string;
+}
+
+/** Another open tab an explanation drew on. */
+export interface ExplainSource {
+  tabId: number;
+  title: string;
+  url: string;
+}
+
+export type ExplainResult =
+  | { ok: true; explanation: string; sources: ExplainSource[] }
+  | { ok: false; error: string };
+
 
 /* ------------------------------------------------------------------ *
  * Anchoring saved notes to page text (W3C Web Annotation selectors)
@@ -212,3 +226,10 @@ export interface AnchorMatch extends TextPositionSelector {
   /** 1 for the exact strategies; 0-1 for `fuzzy`. */
   similarity: number;
 }
+
+/**
+ * chrome.storage.session key: the note the user last clicked on a page, so a
+ * side panel that opens because of that click can still show it.
+ * Value: `{ id, tabId, windowId, at }`.
+ */
+export const FOCUSED_NOTE_KEY = 'focusedNote';

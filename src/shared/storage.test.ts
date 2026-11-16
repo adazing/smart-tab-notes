@@ -121,6 +121,24 @@ describe('annotations', () => {
     expect(await setAnnotationOrphaned(annotation.id, true)).toBeUndefined();
   });
 
+  it('stores the AI explanation, question and sources with a note', async () => {
+    const page = await savePage({ url: 'https://example.com', title: 'Example' });
+    const annotation = await addAnnotation({
+      pageId: page.id, text: 'Quote', note: 'Mine', explanation: 'It means X.', question: 'What?',
+      sources: [{ title: 'Other', url: 'https://other.example', tabId: 7 } as never],
+      id: 'tamper', deleted: true,
+    } as never);
+    expect(annotation).toMatchObject({
+      text: 'Quote', note: 'Mine', explanation: 'It means X.', question: 'What?',
+      sources: [{ title: 'Other', url: 'https://other.example' }], deleted: false,
+    });
+    expect(annotation.id).not.toBe('tamper');
+    expect(annotation.sources![0]).not.toHaveProperty('tabId');
+    expect(await listAnnotations(page.id)).toEqual([annotation]);
+    const bare = await addAnnotation({ pageId: page.id, text: 'Only a quote' });
+    expect(Object.keys(bare)).not.toContain('explanation');
+  });
+
   it('rejects missing or deleted parent pages without inserting children', async () => {
     await expect(addAnnotation({ pageId: 'missing', text: 'Text' })).rejects.toThrow('Active page not found');
     const page = await savePage({ url: 'https://example.com', title: 'Example' });

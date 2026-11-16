@@ -21,18 +21,19 @@
  * WHEN YOU ADD A MESSAGE: also add a row to the table in the README.
  */
 
-import type { Annotation } from './storage-types';
+import type { Annotation, AnnotationSource } from './storage-types';
 import type {
   Ack,
   AnnotationTarget,
   Empty,
+  ExplainResult,
+  ExplainRun,
   PageContext,
   SelectionInfo,
   SidePanelView,
   TabContext,
   TabGroupRef,
   TabRef,
-  ToolbarAction,
 } from './types';
 import { isFromExtensionPage } from './senders';
 
@@ -45,10 +46,14 @@ export type Endpoint = 'background' | 'sidepanel' | 'content';
  * Naming: `area:verb`, lower camel after the colon.
  */
 export interface MessageContracts {
-  /** Week 1 acknowledgment only; replace the handler with AI/storage routing later. */
-  'toolbar:action': {
-    request: ToolbarAction;
-    response: Ack;
+  /**
+   * Toolbar Explain and Ask. The worker reads the sender's tab and other tabs
+   * in its window (getTabContext), calls POST /explain and replies with the
+   * answer. Failures come back as `{ ok: false, error }`, ready to show.
+   */
+  'explain:run': {
+    request: ExplainRun;
+    response: ExplainResult;
   };
 
   /** Health check. Useful for demos and for checking a content script is live. */
@@ -143,9 +148,10 @@ export interface MessageContracts {
    * ---------------------------------------------------------------- */
 
   /**
-   * Save a highlight, with its note and its anchoring selectors. The
-   * worker creates or restores the page record first, so the caller only
-   * has to know the URL and title.
+   * Save a highlight, with its note and its anchoring selectors, and the AI
+   * explanation when it came from Explain or Ask. The worker creates or
+   * restores the page record first, so the caller only has to know the URL
+   * and title. Content scripts may only save to their own tab's page.
    */
   'annotations:save': {
     request: {
@@ -155,6 +161,9 @@ export interface MessageContracts {
       text: string;
       note?: string;
       target?: AnnotationTarget;
+      explanation?: string;
+      question?: string;
+      sources?: AnnotationSource[];
     };
     response: { ok: boolean; annotation?: Annotation; reason?: string };
   };
@@ -165,10 +174,50 @@ export interface MessageContracts {
     response: { annotations: Annotation[]; reason?: string };
   };
 
-  /** Edit a note's own text. An empty string clears it. */
+  /**
+   * Edit a note. `note: ''` clears the note. `explanation` (with `question`
+   * and `sources`) attaches an AI answer, e.g. Explain from the note card.
+   */
   'annotations:update': {
-    request: { id: string; note: string };
+    request: {
+      id: string;
+      note?: string;
+      explanation?: string;
+      question?: string;
+      sources?: AnnotationSource[];
+    };
     response: { ok: boolean; annotation?: Annotation; reason?: string };
+  };
+
+  /**
+   * Sent by the worker after a page's notes change (saved, edited, deleted),
+   * to side panels and to tabs showing that page, so lists and highlights
+   * stay in step wherever the change came from.
+   */
+  'annotations:changed': {
+    request: { url: string };
+    response: Ack;
+  };
+
+  /**
+   * Page -> worker: the user clicked a note's highlighted text. The worker
+   * opens the side panel if it can and tells it with `annotations:focused`.
+   */
+  'annotations:focus': {
+    request: { id: string };
+    response: Ack;
+  };
+
+  /** Worker -> side panels: show this note in the Notes view (scroll to it, flash it). */
+  'annotations:focused': {
+    request: { id: string; tabId: number; windowId: number };
+    response: Ack;
+  };
+
+  /** Side panel -> page: scroll to a saved highlight, flash it and open its card. */
+  'annotations:reveal': {
+    request: { id: string };
+    response: Ack;
   };
 
   /** Soft-delete one note, undrawing its highlight. */

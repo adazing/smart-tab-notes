@@ -16,6 +16,14 @@ class ExplainRequest(BaseModel):
     selected_text: str = Field(min_length=1, max_length=20_000)
     page_text: str = Field(default="", max_length=1_000_000)
     other_tabs: list[TabInput] = Field(default_factory=list, max_length=20)
+    # The reader's own question about the selection (the toolbar's Ask). When
+    # missing or blank, the selection is explained.
+    question: str | None = Field(default=None, max_length=2_000)
+
+    @field_validator("question")
+    @classmethod
+    def blank_question_is_none(cls, question: str | None) -> str | None:
+        return question.strip() or None if question is not None else None
 
 
 class ExplainResponse(BaseModel):
