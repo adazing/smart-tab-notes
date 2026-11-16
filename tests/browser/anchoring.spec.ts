@@ -142,7 +142,7 @@ async function select(page: Page, selector: string): Promise<void> {
  */
 async function highlight(page: Page, selector: string): Promise<void> {
   await select(page, selector);
-  await page.locator(TOOLBAR).getByRole('button', { name: 'Highlight', exact: true }).click();
+  await page.locator(TOOLBAR).getByRole('button', { name: 'Note', exact: true }).click();
   await expect(page.locator(CARD)).toBeVisible();
   await closeCard(page);
   await dismissToolbar(page);
@@ -150,11 +150,12 @@ async function highlight(page: Page, selector: string): Promise<void> {
 
 async function addNote(page: Page, selector: string, note: string): Promise<void> {
   await select(page, selector);
-  const panel = page.locator(TOOLBAR);
-  await panel.getByRole('button', { name: 'Note', exact: true }).click();
-  await panel.getByLabel('Note about this text').fill(note);
-  await panel.getByRole('button', { name: 'Save note' }).click();
-  await expect(page.locator(CARD)).toContainText(note);
+  // Every note is a highlight: Highlight opens the card with its note box ready.
+  await page.locator(TOOLBAR).getByRole('button', { name: 'Note', exact: true }).click();
+  const card = page.locator(CARD);
+  await card.getByLabel('Note about this text').fill(note);
+  await card.getByRole('button', { name: 'Save note' }).click();
+  await expect(card).toContainText(note);
   await closeCard(page);
   await dismissToolbar(page);
 }
@@ -246,10 +247,14 @@ test('saved notes come back on reload, follow a changed page, and are kept when 
   /* ---- the note card ---------------------------------------------- */
   const card = page.locator(CARD);
   const second = (await drawnNotes(page))[1]!;
+  // Start the pointer off the text: the toolbar we just used can leave it
+  // resting on this highlight already, and then hover() fires no mouseover.
+  await page.mouse.move(0, 0);
   await spanOf(page, second.id).hover();
   await expect(card).toBeVisible();
   await expect(card).toContainText('Why squared?');
-  await expect(card).toContainText('No AI explanation saved for this highlight yet.');
+  // No explanation yet, so the card offers to make one.
+  await expect(card.getByRole('button', { name: 'Explain', exact: true })).toBeVisible();
 
   // Clicking pins the card open, so Edit note can be reached.
   await closeCard(page);
@@ -265,6 +270,7 @@ test('saved notes come back on reload, follow a changed page, and are kept when 
   await expect(page.locator(HIGHLIGHT).first()).toBeAttached();
   expect(await drawn(page)).toEqual(QUOTES);
   expect(await page.locator('body').innerText()).toBe(originalText);
+  await page.mouse.move(0, 0);
   await spanOf(page, (await drawnNotes(page))[1]!.id).hover();
   await expect(card).toContainText('Because every token attends to every other.');
   await closeCard(page);
@@ -283,6 +289,7 @@ test('saved notes come back on reload, follow a changed page, and are kept when 
     'get expensive.');
   expect(afterEdit[2]!.text).toBe(QUOTES[2]);
 
+  await page.mouse.move(0, 0);
   await spanOf(page, afterEdit[1]!.id).hover();
   await expect(card).toContainText('The page has changed here');
   await closeCard(page);
@@ -317,6 +324,7 @@ test('saved notes come back on reload, follow a changed page, and are kept when 
   await closeCard(page);
   await spanOf(page, kept[0]!.id).click();
   await card.getByRole('button', { name: 'Delete' }).click();
+  await card.getByRole('button', { name: 'Really delete?' }).click();
   await expect(spanOf(page, kept[0]!.id)).toBeHidden();
   expect(await drawn(page)).toHaveLength(1);
 

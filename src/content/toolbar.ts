@@ -1,20 +1,39 @@
 import styles from './toolbar.css?inline';
 import { sendToBackground } from '../shared/messages';
-import type { ToolbarAction } from '../shared/types';
+import type { ExplainSource } from '../shared/types';
 import { captureSelection, toolbarPosition, type SelectionSnapshot } from './selection';
-import type { AnnotationLayer } from './annotationLayer';
+import type { AnnotationLayer, SavedAnswer } from './annotationLayer';
 
 const HOST_ID = 'smart-tab-notes-selection-toolbar';
+const MESSAGING_UNAVAILABLE = 'The extension was updated. Reload this page to use it here.';
 let uninstall: (() => void) | undefined;
+
+/**
+ * A toolbar action that reads other tabs or writes storage only runs within
+ * this long after a real (trusted) pointer or key event inside the toolbar.
+ */
+const GESTURE_WINDOW_MS = 1_000;
+
+export interface ToolbarOptions {
+  /**
+   * Default true. The toolbar lives in an open shadow root, so the page's own
+   * scripts can call `.click()` on its buttons. Explain and Ask read the
+   * user's other tabs and show the answer in the page, so they (and saving)
+   * only run after a trusted user input inside the toolbar. Unit tests turn
+   * this off because jsdom events are never trusted.
+   */
+  requireUserGesture?: boolean;
+}
 
 /**
  * One lifecycle per content-script instance. Reinitialization removes old listeners.
  *
- * Highlight and Note save through the annotation layer, which owns the
- * selectors, the highlight spans and the note card; Explain and Ask still
- * go to the background worker as an acknowledgement only.
+ * The menu is Explain, Ask and Note. Every save goes through the
+ * annotation layer, so every saved note is a highlight: the layer owns the
+ * selectors, the highlight spans and the card that opens on click.
  */
-export function installSelectionToolbar(annotations: AnnotationLayer): () => void {
+export function installSelectionToolbar(annotations: AnnotationLayer, options: ToolbarOptions = {}): () => void {
+  const requireUserGesture = options.requireUserGesture ?? true;
   uninstall?.();
   // Also clean up a previous injected script instance using a host-scoped event.
   document.getElementById(HOST_ID)?.dispatchEvent(new Event('smart-tab-notes:dispose'));
@@ -46,7 +65,10 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
   let dragging = false;
   let interacting = false;
   let timer: number | undefined;
-  let explanationTimer: number | undefined;
+  /** Bumped whenever the detail area changes, so late replies for old content are dropped. */
+  let request = 0;
+  /** performance.now() of the last trusted pointer or key event inside the toolbar. */
+  let lastGesture = -Infinity;
   let frame = 0;
   let url = location.href;
   let disposed = false;
@@ -61,7 +83,7 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
   }
 
   function closeDetail(restoreFocus = false): void {
-    window.clearTimeout(explanationTimer);
+    request++;
     detail.hidden = true;
     detail.replaceChildren();
     if (restoreFocus) actions.querySelector('button')?.focus();
@@ -89,19 +111,21 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
   }
 
   /**
-   * Save a highlight, with or without a note.
+   * Save a highlight, with the AI answer when it came from Explain or Ask.
    *
    * On success the toolbar's work is done: the annotation layer draws the
    * highlight and opens its card, which is both the confirmation and the
    * place to edit or delete the note. A failure stays here, because a user
    * must never be left thinking a note was saved when it was not.
    */
-  async function persist(selected: SelectionSnapshot, note?: string): Promise<void> {
-    status(note === undefined ? 'Saving highlight...' : 'Saving note...');
+  async function persist(selected: SelectionSnapshot, answer?: SavedAnswer): Promise<void> {
+    status('Saving…');
     const result = await annotations.save({
       range: selected.range,
       text: selected.text,
-      ...(note !== undefined ? { note } : {}),
+      ...(answer ?? {}),
+      // A plain highlight opens its card ready for a note.
+      editNote: answer === undefined,
     });
     if (disposed) return;
     if (result.ok && result.drawn !== false) {
@@ -119,14 +143,79 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
       : result.reason ?? 'Could not save this highlight.');
   }
 
-  async function report(payload: ToolbarAction): Promise<void> {
-    const result = await sendToBackground('toolbar:action', payload);
-    const failed = !result.ok || !result.data.ok; // undelivered, or the worker said no
-    if (failed && !disposed && snapshot?.text === payload.text && snapshot.url === payload.url) {
-      // Stop the placeholder explanation from replacing this notice.
-      window.clearTimeout(explanationTimer);
-      status('Extension messaging is unavailable. Reload this page after reloading the extension.');
+  /** True when the user, not a page script, just interacted with the toolbar. */
+  function userInitiated(): boolean {
+    return !requireUserGesture || performance.now() - lastGesture <= GESTURE_WINDOW_MS;
+  }
+
+  function recordGesture(event: Event): void {
+    if (event.isTrusted && event.composedPath().includes(host)) lastGesture = performance.now();
+  }
+
+  /** Show `children` in the detail area, replacing what was there. */
+  function showDetail(...children: Node[]): void {
+    detail.hidden = false;
+    detail.replaceChildren(...children);
+    position();
+  }
+
+  function paragraph(className: string, text: string, role?: string): HTMLParagraphElement {
+    const element = document.createElement('p');
+    element.className = className;
+    element.textContent = text;
+    if (role) element.setAttribute('role', role);
+    return element;
+  }
+
+  function row(): HTMLDivElement {
+    const element = document.createElement('div');
+    element.className = 'row';
+    return element;
+  }
+
+  /** Explain the selection, or answer `question` about it, then offer to save. */
+  async function explain(selected: SelectionSnapshot, question?: string): Promise<void> {
+    closeDetail();
+    const mine = request;
+    const loading = paragraph('status loading', question ? 'Answering…' : 'Explaining…', 'status');
+    loading.setAttribute('aria-busy', 'true');
+    const loadingRow = row();
+    button('Cancel', () => closeDetail(true), loadingRow);
+    showDetail(loading, loadingRow);
+
+    const result = await sendToBackground('explain:run', {
+      text: selected.text, url: selected.url, ...(question ? { question } : {}),
+    });
+    if (disposed || mine !== request || snapshot !== selected) return;
+    if (!result.ok) { status(MESSAGING_UNAVAILABLE); return; }
+    const answer = result.data;
+    if (!answer.ok) {
+      const actionsRow = row();
+      button('Try again', () => { if (userInitiated()) void explain(selected, question); }, actionsRow);
+      button('Close', () => closeDetail(true), actionsRow);
+      showDetail(paragraph('error', answer.error, 'alert'), actionsRow);
+      return;
     }
+    showAnswer(selected, answer.explanation, answer.sources, question);
+  }
+
+  function showAnswer(selected: SelectionSnapshot, explanation: string, sources: ExplainSource[], question?: string): void {
+    const children: Node[] = [];
+    if (question) children.push(paragraph('question', `Q: ${question}`));
+    children.push(paragraph('answer', explanation, 'status'));
+    if (sources.length) {
+      children.push(paragraph('sources', `From your tabs: ${sources.map(s => s.title || s.url).join(' · ')}`));
+    }
+    const actionsRow = row();
+    const save = button('Save as note', () => {
+      if (!userInitiated()) return;
+      save.disabled = true;
+      void persist(selected, { explanation, ...(question ? { question } : {}), sources: sources.map(({ title, url }) => ({ title, url })) });
+    }, actionsRow);
+    save.className = 'submit';
+    button('Close', () => closeDetail(true), actionsRow);
+    children.push(actionsRow);
+    showDetail(...children);
   }
 
   function position(): void {
@@ -175,69 +264,66 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
   }
 
   button('Explain', () => {
-    if (!snapshot) return;
-    const selected = snapshot;
-    closeDetail();
-    status('Loading explanation… (Week 1 demo)');
-    void report({ action: 'explain', text: selected.text, url: selected.url });
-    explanationTimer = window.setTimeout(() => {
-      if (snapshot === selected) status('Mock explanation: this selected passage introduces an idea. An AI explanation will replace this demo in Week 2.');
-    }, 500);
+    if (!snapshot || !userInitiated()) return;
+    void explain(snapshot);
   }, actions);
 
-  function openEditor(action: 'ask' | 'note'): void {
+  function openAsk(): void {
     if (!snapshot) return;
     const selected = snapshot;
     closeDetail();
     detail.hidden = false;
     const form = document.createElement('form');
     const label = document.createElement('label');
-    label.textContent = action === 'ask' ? 'Question about this text' : 'Note about this text';
-    const input = document.createElement(action === 'ask' ? 'input' : 'textarea');
-    input.id = `smart-tab-notes-${action}`;
+    label.textContent = 'Question about this text';
+    const input = document.createElement('input');
+    input.id = 'smart-tab-notes-ask';
     input.required = true;
     label.htmlFor = input.id;
     form.append(label, input);
-    const submit = button(action === 'ask' ? 'Ask question' : 'Save note', () => {}, form);
+    const actionsRow = row();
+    const submit = button('Ask question', () => {}, actionsRow);
     submit.type = 'submit';
     submit.className = 'submit';
-    button('Cancel', () => closeDetail(true), form);
+    button('Cancel', () => closeDetail(true), actionsRow);
+    form.append(actionsRow);
     form.addEventListener('submit', event => {
       event.preventDefault();
       const value = input.value.trim();
       if (!value) { input.focus(); return; }
-      if (action === 'note') { void persist(selected, value); return; }
-      void report({ text: selected.text, url: selected.url, action, question: value });
-      status('Demo: question received. AI answers will be connected in Week 2.');
+      if (!userInitiated()) return;
+      void explain(selected, value);
     }, { signal });
     detail.append(form);
     position();
     input.focus();
   }
 
-  button('Ask', () => openEditor('ask'), actions);
-  button('Highlight', () => {
-    if (!snapshot) return;
+  button('Ask', () => openAsk(), actions);
+  // Note highlights the text and opens its note box; left empty, it is a plain highlight.
+  button('Note', () => {
+    if (!snapshot || !userInitiated()) return;
     closeDetail();
     void persist(snapshot);
   }, actions);
-  button('Note', () => openEditor('note'), actions);
 
   // Preserve the page selection when clicking buttons, while allowing editor focus.
   root.addEventListener('mousedown', event => {
     if (event.target instanceof HTMLButtonElement) event.preventDefault();
   }, { signal });
   document.addEventListener('pointerdown', event => {
+    recordGesture(event);
     if (event.composedPath().includes(host)) { interacting = true; return; }
     interacting = false;
     dragging = true;
     hide();
   }, { signal, capture: true });
-  document.addEventListener('pointerup', () => { dragging = false; schedule(); }, { signal });
+  document.addEventListener('pointerup', event => { recordGesture(event); dragging = false; schedule(); }, { signal });
   document.addEventListener('pointercancel', () => { dragging = false; hide(); }, { signal });
   document.addEventListener('selectionchange', schedule, { signal });
-  document.addEventListener('keyup', event => { if (event.key !== 'Escape') schedule(); }, { signal });
+  document.addEventListener('keyup', event => { recordGesture(event); if (event.key !== 'Escape') schedule(); }, { signal });
   document.addEventListener('keydown', event => {
+    recordGesture(event);
     if (!event.composedPath().includes(host) && event.key !== 'Escape') interacting = false;
     if (event.key !== 'Escape' || panel.hidden) return;
     if (!detail.hidden) closeDetail(true);
@@ -269,7 +355,6 @@ export function installSelectionToolbar(annotations: AnnotationLayer): () => voi
     controller.abort();
     observer.disconnect();
     window.clearTimeout(timer);
-    window.clearTimeout(explanationTimer);
     window.clearInterval(navigationTimer);
     cancelAnimationFrame(frame);
     host.remove();

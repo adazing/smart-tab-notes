@@ -16,7 +16,8 @@
     "test:browser": "npm run build && playwright test",
     "test:sites": "vite-node scripts/site-check.ts",
     "test:anchors": "vite-node scripts/anchor-check.ts",
-    "test:storage": "vitest run src/shared"
+    "test:storage": "vitest run src/shared",
+    "mock-backend": "node scripts/mock-backend.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "0.6.0",

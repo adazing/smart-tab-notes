@@ -7,8 +7,19 @@ import { quoteAt } from '../shared/anchor';
 import type { Annotation } from '../shared/storage-types';
 
 /** The layer's only way out is sendToBackground, so that is what we fake. */
-const bus = vi.hoisted(() => ({ send: vi.fn() }));
-vi.mock('../shared/messages', () => ({ sendToBackground: bus.send }));
+const bus = vi.hoisted(() => {
+  /** Handlers the layer registered with onMessage, by kind, so tests can deliver messages. */
+  const handlers: Record<string, (payload: never) => unknown> = {};
+  return {
+    send: vi.fn(),
+    handlers,
+    on: vi.fn((_endpoint: string, kind: string, handler: (payload: never) => unknown) => {
+      handlers[kind] = handler;
+      return () => { if (handlers[kind] === handler) delete handlers[kind]; };
+    }),
+  };
+});
+vi.mock('../shared/messages', () => ({ sendToBackground: bus.send, onMessage: bus.on }));
 
 const PAGE =
   '<h1>Attention</h1>' +
@@ -91,7 +102,8 @@ beforeEach(() => {
       case 'annotations:update': {
         const existing = stored.find((note) => note.id === payload.id);
         if (!existing) return { ok: true, data: { ok: false, reason: 'This note no longer exists.' } };
-        existing.note = payload.note === '' ? undefined : payload.note;
+        if (payload.note !== undefined) existing.note = payload.note === '' ? undefined : payload.note;
+        if (payload.explanation !== undefined) Object.assign(existing, { explanation: payload.explanation, sources: payload.sources });
         return { ok: true, data: { ok: true, annotation: { ...existing } } };
       }
       case 'annotations:delete': {
@@ -304,6 +316,9 @@ describe('the note card', () => {
   it('deletes a note, takes the highlight out, and restores the text', async () => {
     spans('note-1')[0]!.click();
     click('Delete');
+    // Deleting asks once more, so a stray click can't lose a note.
+    expect(bus.send).not.toHaveBeenCalledWith('annotations:delete', expect.anything());
+    click('Really delete?');
     await settle();
 
     expect(sentPayloads('annotations:delete')).toEqual([{ id: 'note-1' }]);
@@ -397,6 +412,138 @@ describe('saving a new highlight', () => {
 
     expect(result).toEqual({ ok: false, reason: 'Pages must use HTTP(S).' });
     expect(spans()).toEqual([]);
+  });
+});
+
+describe('notes are highlights', () => {
+  function selectionOf(selector: string): Range {
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector(selector)!);
+    return range;
+  }
+
+  it('saves an AI answer with the highlight and shows it, with its sources, in the card', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+    const paragraph = document.querySelector('#second')!;
+    await layer.save({
+      range: selectionOf('#second'), text: paragraph.textContent!,
+      explanation: 'Cost grows with the square of the length.', question: 'Why slow?',
+      sources: [{ title: 'Big O', url: 'https://example.com/big-o' }],
+    });
+    await settle();
+
+    expect(sentPayloads('annotations:save')[0]).toMatchObject({
+      explanation: 'Cost grows with the square of the length.', question: 'Why slow?',
+      sources: [{ title: 'Big O', url: 'https://example.com/big-o' }],
+    });
+    // The card opens on the new highlight as the confirmation.
+    expect(card().hidden).toBe(false);
+    expect(card().textContent).toContain('Q: Why slow?');
+    expect(card().textContent).toContain('Cost grows with the square');
+    const link = card().querySelector('a')!;
+    expect(link.textContent).toBe('Big O');
+    expect(link.getAttribute('href')).toBe('https://example.com/big-o');
+    // Already explained: no Explain button.
+    expect([...card().querySelectorAll('button')].map((b) => b.textContent)).not.toContain('Explain');
+  });
+
+  it('opens a plain highlight with its note box ready', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+    await layer.save({ range: selectionOf('#second'), text: 'The model scales', editNote: true });
+    await settle();
+    const field = card().querySelector('textarea')!;
+    expect(field).not.toBeNull();
+    expect(field.placeholder).toBe('Add a note (optional)');
+  });
+
+  it('explains a saved highlight from its card and stores the answer on it', async () => {
+    stored = [savedNote('quadratically')];
+    layer = installAnnotationLayer({ requireUserGesture: false });
+    await settle();
+    bus.send.mockImplementationOnce(async () => ({
+      ok: true, data: { ok: true, explanation: 'Squared growth.', sources: [{ tabId: 3, title: 'Big O', url: 'https://example.com/big-o' }] },
+    }));
+    spans('note-1')[0]!.click();
+    click('Explain');
+    expect(card().textContent).toContain('Explaining…');
+    await settle(10);
+
+    expect(sentPayloads('explain:run')).toEqual([{ text: 'quadratically', url: location.href }]);
+    expect(sentPayloads('annotations:update')).toEqual([{
+      id: 'note-1', explanation: 'Squared growth.', sources: [{ title: 'Big O', url: 'https://example.com/big-o' }],
+    }]);
+    expect(card().textContent).toContain('Squared growth.');
+  });
+
+  it("ignores a page script clicking the card's Explain button", async () => {
+    stored = [savedNote('quadratically')];
+    layer = installAnnotationLayer();
+    await settle();
+    spans('note-1')[0]!.click();
+    click('Explain');
+    await settle(10);
+    expect(sentPayloads('explain:run')).toEqual([]);
+  });
+
+  it("doesn't reopen a card closed with Escape until the pointer leaves the highlight", async () => {
+    stored = [savedNote('quadratically')];
+    layer = installAnnotationLayer();
+    await settle();
+    const span = spans('note-1')[0]!;
+    const over = (target: Element) => target.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    over(span);
+    expect(card().hidden).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(card().hidden).toBe(true);
+    over(span); // still resting on it
+    expect(card().hidden).toBe(true);
+    over(document.querySelector('h1')!);
+    over(span); // came back
+    expect(card().hidden).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    span.click(); // a click always opens
+    expect(card().hidden).toBe(false);
+  });
+
+  it('only asks the side panel to show a note for a real click, not a scripted one', async () => {
+    stored = [savedNote('quadratically')];
+    layer = installAnnotationLayer();
+    await settle();
+    spans('note-1')[0]!.click(); // jsdom clicks are untrusted, like a page script's
+    expect(card().hidden).toBe(false);
+    expect(sentPayloads('annotations:focus')).toEqual([]);
+  });
+
+  it('shows a note edited elsewhere in a card that is already open', async () => {
+    stored = [savedNote('quadratically', { note: 'Old text' })];
+    layer = installAnnotationLayer();
+    await settle();
+    spans('note-1')[0]!.click();
+    expect(card().textContent).toContain('Old text');
+    stored[0]!.note = 'New text from the side panel';
+    bus.handlers['annotations:changed']!({ url: location.href } as never);
+    await settle(10);
+    expect(card().textContent).toContain('New text from the side panel');
+  });
+
+  it('re-reads notes when they change elsewhere, and reveals one when the side panel asks', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+    expect(spans()).toEqual([]);
+
+    stored = [savedNote('quadratically')];
+    bus.handlers['annotations:changed']!({ url: location.href } as never);
+    await settle();
+    expect(spans('note-1')).toHaveLength(1);
+
+    Element.prototype.scrollIntoView = vi.fn();
+    expect(bus.handlers['annotations:reveal']!({ id: 'note-1' } as never)).toEqual({ ok: true });
+    await settle(400);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(card().hidden).toBe(false);
+    expect(bus.handlers['annotations:reveal']!({ id: 'missing' } as never)).toMatchObject({ ok: false });
   });
 });
 
