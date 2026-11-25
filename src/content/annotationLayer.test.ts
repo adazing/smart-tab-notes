@@ -126,6 +126,31 @@ describe('putting saved notes back on the page', () => {
     expect(document.querySelector('a')!.getAttribute('href')).toBe('/rnn');
   });
 
+  it('draws a quote in full when another note sits inside it', async () => {
+    // The inner highlight splits the text node the outer one needs, so a
+    // single index snapshot would clamp the outer quote to the text before it.
+    const outer = 'The model scales quadratically with sequence length.';
+    stored = [savedNote(outer), savedNote('scales quadratically')];
+    const before = document.body.textContent;
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans('note-1').map((span) => span.textContent).join('')).toBe(outer);
+    expect(spans('note-2').map((span) => span.textContent).join('')).toBe('scales quadratically');
+    expect(document.body.textContent).toBe(before);
+  });
+
+  it('draws two quotes that only partly overlap', async () => {
+    stored = [savedNote('The model scales'), savedNote('scales quadratically')];
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans('note-1').map((span) => span.textContent).join('')).toBe('The model scales');
+    expect(spans('note-2').map((span) => span.textContent).join('')).toBe('scales quadratically');
+  });
+
   it('draws nothing and asks for nothing when the page has no saved notes', async () => {
     layer = installAnnotationLayer();
     await settle();

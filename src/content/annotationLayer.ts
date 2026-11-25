@@ -156,6 +156,15 @@ export function installAnnotationLayer(): AnnotationLayer {
    * drawn from the bottom of the page upwards: wrapping a highlight splits
    * the text nodes after its start, so going backwards keeps the offsets of
    * the notes still to come correct.
+   *
+   * That holds only while the quotes do not overlap. One quote inside
+   * another lands in a text node the inner highlight has already split, so
+   * the snapshot's offsets for the outer one point past the end of a node
+   * that is now shorter. The index is rebuilt before such a quote is
+   * painted. Wrapping text in a span does not change the normalized text —
+   * a span is not a block boundary, and a split whitespace run still
+   * collapses to one space — so the offsets found above stay valid, and the
+   * rebuilt index resolves them against the DOM as it now is.
    */
   function anchorPending(): void {
     if (disposed) return;
@@ -191,8 +200,22 @@ export function installAnnotationLayer(): AnnotationLayer {
     }
 
     const ordered = [...placed.entries()].sort(([, a], [, b]) => b.start - a.start);
+    const done: AnchorMatch[] = [];
+    let current = index;
     for (const [entry, match] of ordered) {
-      const pieces = piecesFromOffsets(index, match.start, match.end);
+      const overlaps = done.some((other) => match.start < other.end && other.start < match.end);
+      if (overlaps) {
+        const fresh = buildTextIndex();
+        // A page that changed under us mid-pass invalidates the offsets
+        // themselves, not just the nodes. Leave it to the next pass.
+        if (fresh.text !== index.text) {
+          entry.attempts += 1;
+          continue;
+        }
+        current = fresh;
+      }
+      done.push(match);
+      const pieces = piecesFromOffsets(current, match.start, match.end);
       const spans = paintPieces(pieces, {
         id: entry.annotation.id,
         approximate: match.strategy === 'fuzzy',
