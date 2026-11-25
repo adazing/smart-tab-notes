@@ -148,8 +148,67 @@ export interface Ack {
 /** Payload for messages that take no arguments. */
 export type Empty = Record<string, never>;
 
-/** Week 1 actions carry a snapshot, never a later browser selection. */
+/**
+ * Toolbar actions that are still Week 1 acknowledgements. They carry a
+ * snapshot of the selection, never a later browser selection.
+ *
+ * Highlight and Note are not here: they save real notes through the
+ * `annotations:*` messages instead.
+ */
 export type ToolbarAction =
-  | { action: 'explain' | 'highlight'; text: string; url: string }
-  | { action: 'ask'; text: string; url: string; question: string }
-  | { action: 'note'; text: string; url: string; note: string };
+  | { action: 'explain'; text: string; url: string }
+  | { action: 'ask'; text: string; url: string; question: string };
+
+/* ------------------------------------------------------------------ *
+ * Anchoring saved notes to page text (W3C Web Annotation selectors)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The quote and the text around it, as in the W3C Web Annotation model's
+ * TextQuoteSelector. `prefix`/`suffix` are what let us re-find the quote
+ * when the page has changed, and tell two copies of the same sentence
+ * apart.
+ *
+ * All three strings come from the normalized page text built by
+ * `content/textIndex.ts`, not from `Selection.toString()`: runs of
+ * whitespace are collapsed to one space so re-indented markup still
+ * matches.
+ */
+export interface TextQuoteSelector {
+  /** The highlighted text itself. */
+  exact: string;
+  /** Up to ANCHOR_CONTEXT_CHARS characters immediately before `exact`. */
+  prefix: string;
+  /** Up to ANCHOR_CONTEXT_CHARS characters immediately after `exact`. */
+  suffix: string;
+}
+
+/**
+ * Character offsets into the normalized page text, as in the W3C model's
+ * TextPositionSelector. Only a hint: we always confirm it against the
+ * quote, because any edit above the highlight shifts it.
+ */
+export interface TextPositionSelector {
+  /** Offset of the first character. */
+  start: number;
+  /** Offset one past the last character. */
+  end: number;
+}
+
+/** Where one saved note lives: a page, plus both selectors for its quote. */
+export interface AnnotationTarget {
+  /** Normalized page URL the offsets and quote were taken from. */
+  source: string;
+  quote: TextQuoteSelector;
+  position: TextPositionSelector;
+}
+
+/** How a saved note was placed on the page again. */
+export type AnchorStrategy = 'position' | 'quote' | 'fuzzy';
+
+/** A re-found quote: offsets into the normalized page text, and how. */
+export interface AnchorMatch extends TextPositionSelector {
+  strategy: AnchorStrategy;
+  /** 1 for the exact strategies; 0-1 for `fuzzy`. */
+  similarity: number;
+}

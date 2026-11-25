@@ -21,8 +21,10 @@
  * WHEN YOU ADD A MESSAGE: also add a row to the table in the README.
  */
 
+import type { Annotation } from './storage-types';
 import type {
   Ack,
+  AnnotationTarget,
   Empty,
   PageContext,
   SelectionInfo,
@@ -129,6 +131,58 @@ export interface MessageContracts {
   /** Sent by the side panel once it has mounted, so the worker can seed it. */
   'sidepanel:ready': {
     request: Empty;
+    response: Ack;
+  };
+
+  /* ---------------------------------------------------------------- *
+   * Saved notes and highlights
+   *
+   * Content scripts cannot use the extension's IndexedDB -- theirs
+   * belongs to the page's origin -- so every read and write goes through
+   * the worker, which owns `shared/storage.ts`.
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Save a highlight, with its note and its anchoring selectors. The
+   * worker creates or restores the page record first, so the caller only
+   * has to know the URL and title.
+   */
+  'annotations:save': {
+    request: {
+      url: string;
+      title: string;
+      /** The quote, for lists that show notes without the page open. */
+      text: string;
+      note?: string;
+      target?: AnnotationTarget;
+    };
+    response: { ok: boolean; annotation?: Annotation; reason?: string };
+  };
+
+  /** Every active note for one URL, oldest first. Empty for an unsaved page. */
+  'annotations:list': {
+    request: { url: string };
+    response: { annotations: Annotation[]; reason?: string };
+  };
+
+  /** Edit a note's own text. An empty string clears it. */
+  'annotations:update': {
+    request: { id: string; note: string };
+    response: { ok: boolean; annotation?: Annotation; reason?: string };
+  };
+
+  /** Soft-delete one note, undrawing its highlight. */
+  'annotations:delete': {
+    request: { id: string };
+    response: Ack;
+  };
+
+  /**
+   * Record whether this visit could place the note's quote. Sent only when
+   * the answer changed, and never advances `updatedAt`.
+   */
+  'annotations:anchorState': {
+    request: { id: string; orphaned: boolean };
     response: Ack;
   };
 }

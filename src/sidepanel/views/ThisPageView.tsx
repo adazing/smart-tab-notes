@@ -10,8 +10,9 @@
  *   side panel -> content       the connection check button
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { isNoReceiverError, sendToBackground, sendToTab } from '../../shared/messages';
+import type { Annotation } from '../../shared/storage-types';
 import type { TabContext } from '../../shared/types';
 import type { PageState } from '../usePageState';
 
@@ -91,6 +92,91 @@ function PageTextCard({ tabId }: { tabId: number }): JSX.Element {
   );
 }
 
+/**
+ * The notes saved against this page.
+ *
+ * A note whose quote the page no longer contains is marked orphaned by the
+ * content script rather than deleted, and this is where it stays visible:
+ * the highlight is gone from the page, the note is not gone from the user.
+ */
+function NotesCard({ url }: { url: string }): JSX.Element {
+  const [notes, setNotes] = useState<Annotation[] | null>(null);
+  const [error, setError] = useState('');
+
+  const read = useCallback(async (): Promise<Annotation[] | null> => {
+    const result = await sendToBackground('annotations:list', { url });
+    if (!result.ok) {
+      setError(result.error);
+      return null;
+    }
+    // A read the worker could not do comes back as an empty list and a
+    // reason. Left unread, a storage failure looked like a page with no
+    // notes on it.
+    if (result.data.reason !== undefined) {
+      setError(result.data.reason);
+      return null;
+    }
+    setError('');
+    return result.data.annotations;
+  }, [url]);
+
+  useEffect(() => {
+    let current = true;
+    setNotes(null);
+    setError('');
+    void read().then((found) => {
+      if (current && found) setNotes(found);
+    });
+    return () => {
+      current = false;
+    };
+  }, [read]);
+
+  const orphaned = notes?.filter((note) => note.orphaned === true).length ?? 0;
+
+  return (
+    <div className="card">
+      <h3 className="card__title">Notes</h3>
+      {error && <p className="notice">{error}</p>}
+      {notes === null && !error && <p className="muted">Loading...</p>}
+      {notes?.length === 0 && (
+        <p className="muted">
+          No notes here yet. Select text on the page and choose Highlight or Note.
+        </p>
+      )}
+      {notes !== null && notes.length > 0 && (
+        <>
+          <p className="muted">
+            {notes.length === 1 ? '1 note' : `${notes.length} notes`}
+            {orphaned > 0 ? ` · ${orphaned} not found on the page right now` : ''}
+          </p>
+          <ul>
+            {notes.map((note) => (
+              <li key={note.id}>
+                <blockquote className="quote">{note.text}</blockquote>
+                {note.note && <p>{note.note}</p>}
+                {note.orphaned === true && (
+                  <p className="notice">
+                    This text is no longer on the page, so the highlight is not drawn. The note
+                    is kept.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <button
+        type="button"
+        className="button"
+        onClick={() => void read().then((found) => found && setNotes(found))}
+      >
+        Refresh notes
+      </button>
+    </div>
+  );
+}
+
 interface ThisPageViewProps {
   page: PageState;
 }
@@ -148,12 +234,7 @@ export function ThisPageView({ page }: ThisPageViewProps): JSX.Element {
         )}
       </div>
 
-      <div className="card">
-        <h3 className="card__title">Notes</h3>
-        <p className="muted">
-          Saved annotations and the revisit recap will appear here.
-        </p>
-      </div>
+      <NotesCard url={activeTab.url} />
 
       <PageTextCard tabId={activeTab.tabId} />
 

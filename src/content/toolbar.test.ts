@@ -6,6 +6,15 @@ import { sendToBackground } from '../shared/messages';
 
 vi.mock('../shared/messages', () => ({ sendToBackground: vi.fn(async () => ({ ok: true, data: { ok: true } })) }));
 
+/**
+ * The toolbar only asks the annotation layer to save; drawing the
+ * highlight and the note card are that layer's own tests.
+ */
+const annotations = {
+  save: vi.fn(async () => ({ ok: true, drawn: true })),
+  dispose: vi.fn(),
+};
+
 let dispose: () => void;
 const rectangle = { left: 100, right: 250, top: 100, bottom: 120, width: 150, height: 20 };
 
@@ -34,7 +43,7 @@ beforeEach(() => {
   Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: vi.fn(() => rectangle) });
   Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: vi.fn(() => [rectangle]) });
   document.body.innerHTML = '<p id="text">Selected <a href="#">formatted text</a></p><p id="other">Other words</p><p id="blank">   </p><div contenteditable="true">Editable text</div>';
-  dispose = installSelectionToolbar();
+  dispose = installSelectionToolbar(annotations);
 });
 
 afterEach(() => {
@@ -54,7 +63,7 @@ describe('toolbar selection and lifecycle', () => {
     vi.advanceTimersByTime(110);
     expect(panel().hidden).toBe(false);
     expect(root().querySelectorAll('.actions button')).toHaveLength(4);
-    dispose = installSelectionToolbar();
+    dispose = installSelectionToolbar(annotations);
     expect(document.querySelectorAll('[data-smart-tab-notes]')).toHaveLength(1);
   });
 
@@ -87,7 +96,7 @@ describe('toolbar selection and lifecycle', () => {
     select('#other');
     expect(root().querySelector<HTMLElement>('.detail')!.hidden).toBe(true);
     click('Highlight');
-    expect(sendToBackground).toHaveBeenLastCalledWith('toolbar:action', expect.objectContaining({ text: 'Other words' }));
+    expect(annotations.save).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'Other words' }));
   });
 
   it('hides offscreen selections and removes listeners on disposal', () => {
@@ -113,7 +122,7 @@ describe('toolbar actions', () => {
     });
   });
 
-  it.each(['ask', 'note'] as const)('preserves selection while typing a %s', action => {
+  it.each(['ask', 'note'] as const)('preserves selection while typing a %s', async action => {
     select(); click(action === 'ask' ? 'Ask' : 'Note');
     const input = root().querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')!;
     expect(root().activeElement).toBe(input);
@@ -123,19 +132,48 @@ describe('toolbar actions', () => {
     expect(panel().hidden).toBe(false);
     input.value = 'My message';
     root().querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(sendToBackground).toHaveBeenLastCalledWith('toolbar:action', {
-      action, text: 'Selected formatted text', url: location.href,
-      [action === 'ask' ? 'question' : 'note']: 'My message',
-    });
-    expect(root().textContent).toContain(action === 'ask' ? 'Demo: question received' : 'has not been saved to storage');
+
+    if (action === 'ask') {
+      expect(sendToBackground).toHaveBeenLastCalledWith('toolbar:action', {
+        action, text: 'Selected formatted text', url: location.href, question: 'My message',
+      });
+      expect(root().textContent).toContain('Demo: question received');
+      return;
+    }
+    // A note is saved through the annotation layer, with the text snapshot.
+    expect(annotations.save).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: 'Selected formatted text', note: 'My message',
+    }));
+    await vi.advanceTimersByTimeAsync(1);
+    // The drawn highlight and its card are the confirmation, so the toolbar goes.
+    expect(panel().hidden).toBe(true);
   });
 
-  it('highlights without changing formatted content or links', () => {
-    const before = document.querySelector('#text')!.innerHTML;
+  it('saves a highlight through the annotation layer and then gets out of the way', async () => {
     select(); click('Highlight');
-    expect(document.querySelector('#text')!.innerHTML).toBe(before);
-    expect(root().querySelectorAll('.highlight')).toHaveLength(1);
-    expect(root().querySelector<HTMLElement>('.highlight')!.style.pointerEvents).toBe('');
+    expect(root().textContent).toContain('Saving highlight');
+    expect(annotations.save).toHaveBeenLastCalledWith({
+      range: expect.any(Range), text: 'Selected formatted text',
+    });
+    // No second report of the same text to the worker.
+    expect(sendToBackground).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(panel().hidden).toBe(true);
+  });
+
+  it('says a highlight was saved even when the page cannot show it', async () => {
+    annotations.save.mockResolvedValueOnce({ ok: true, drawn: false });
+    select(); click('Highlight');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(root().textContent).toContain('Saved to your notes');
+    expect(panel().hidden).toBe(false);
+  });
+
+  it('reports a failed save instead of pretending it worked', async () => {
+    annotations.save.mockResolvedValueOnce({ ok: false, reason: 'Storage is unavailable.' } as never);
+    select(); click('Highlight');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(root().textContent).toContain('Storage is unavailable.');
   });
 
   it('lets Escape reach the page when focus is on the page, but not from inside the toolbar', () => {
@@ -156,9 +194,11 @@ describe('toolbar actions', () => {
     document.body.removeEventListener('keydown', pageSaw);
   });
 
+  // Explain, not Highlight: saving a highlight no longer goes through
+  // toolbar:action, so this is the action that still reports to the worker.
   it('shows the error when the worker answers but refuses', async () => {
     vi.mocked(sendToBackground).mockResolvedValueOnce({ ok: true, data: { ok: false, reason: 'not from a tab' } });
-    select(); click('Highlight');
+    select(); click('Explain');
     await vi.advanceTimersByTimeAsync(10);
     expect(root().textContent).toContain('Extension messaging is unavailable');
   });

@@ -17,11 +17,32 @@ import {
   type MessageHandler,
   type MessageKind,
 } from '../shared/messages';
-import { isFromExtensionPage, isFromTab } from '../shared/senders';
+import { isFromExtensionPage, isFromTab, mayReachUrl } from '../shared/senders';
+import {
+  addAnnotation,
+  getPageByUrl,
+  listAnnotations,
+  savePage,
+  setAnnotationOrphaned,
+  softDelete,
+  updateAnnotation,
+} from '../shared/storage';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
 
 const LOG = '[smart-tab-notes:bg]';
+
+/** Refused because the sender asked about a page other than its own. */
+const OTHER_PAGE = 'These notes belong to another page.';
+
+/**
+ * Storage rejects for reasons the caller can act on -- a URL we refuse to
+ * save, a note that has since been deleted -- so failures come back as a
+ * reason rather than a dead message channel.
+ */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /* ------------------------------------------------------------------ *
  * Side panel wiring
@@ -57,6 +78,20 @@ function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHand
   return (payload, sender) => {
     if (!isFromExtensionPage(sender, EXTENSION_ORIGIN)) {
       throw new Error(`"${kind}" is only answered for extension pages, not ${sender.url ?? 'unknown sender'}`);
+    }
+    return handler(payload, sender);
+  };
+}
+
+/**
+ * Saved notes are reached from two places: the content script in the tab a
+ * note is on, and the side panel. Anything else -- another extension, a web
+ * page with no content script of ours -- is refused.
+ */
+function notesCallers<K extends MessageKind>(kind: K, handler: MessageHandler<K>): MessageHandler<K> {
+  return (payload, sender) => {
+    if (!isFromExtensionPage(sender, EXTENSION_ORIGIN) && !isFromTab(sender, EXTENSION_ORIGIN)) {
+      throw new Error(`"${kind}" is not answered for ${sender.url ?? 'unknown sender'}`);
     }
     return handler(payload, sender);
   };
@@ -99,6 +134,72 @@ registerHandlers('background', {
       return { ok: true };
     } catch (error) {
       return { ok: false, reason: String(error) };
+    }
+  }),
+
+  /* ---------------------------------------------------------------- *
+   * Saved notes. The worker owns storage; content scripts ask for it.
+   * ---------------------------------------------------------------- */
+
+  'annotations:save': notesCallers('annotations:save', async ({ url, title, text, note, target }, sender) => {
+    try {
+      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
+        return { ok: false, reason: OTHER_PAGE };
+      }
+      const page = await savePage({ url, title });
+      const annotation = await addAnnotation({
+        pageId: page.id,
+        text,
+        ...(note !== undefined ? { note } : {}),
+        ...(target !== undefined ? { target } : {}),
+      });
+      return { ok: true, annotation };
+    } catch (error) {
+      console.warn(LOG, 'could not save a note:', error);
+      return { ok: false, reason: describe(error) };
+    }
+  }),
+
+  'annotations:list': notesCallers('annotations:list', async ({ url }, sender) => {
+    try {
+      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
+        return { annotations: [], reason: OTHER_PAGE };
+      }
+      const page = await getPageByUrl(url);
+      if (!page) return { annotations: [] };
+      return { annotations: await listAnnotations(page.id) };
+    } catch (error) {
+      console.warn(LOG, 'could not read notes:', error);
+      return { annotations: [], reason: describe(error) };
+    }
+  }),
+
+  'annotations:update': notesCallers('annotations:update', async ({ id, note }) => {
+    try {
+      // The page sends '' for a note the user emptied; store no note at all.
+      const annotation = await updateAnnotation(id, { note: note === '' ? undefined : note });
+      if (!annotation) return { ok: false, reason: 'This note no longer exists.' };
+      return { ok: true, annotation };
+    } catch (error) {
+      return { ok: false, reason: describe(error) };
+    }
+  }),
+
+  'annotations:delete': notesCallers('annotations:delete', async ({ id }) => {
+    try {
+      const deleted = await softDelete('annotations', id);
+      return deleted ? { ok: true } : { ok: false, reason: 'This note no longer exists.' };
+    } catch (error) {
+      return { ok: false, reason: describe(error) };
+    }
+  }),
+
+  'annotations:anchorState': notesCallers('annotations:anchorState', async ({ id, orphaned }) => {
+    try {
+      const stored = await setAnnotationOrphaned(id, orphaned);
+      return stored === undefined ? { ok: false, reason: 'This note no longer exists.' } : { ok: true };
+    } catch (error) {
+      return { ok: false, reason: describe(error) };
     }
   }),
 

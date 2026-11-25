@@ -1,0 +1,487 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installAnnotationLayer, type AnnotationLayer } from './annotationLayer';
+import { HIGHLIGHT_ATTRIBUTE } from './highlightSpans';
+import { buildTextIndex } from './textIndex';
+import { quoteAt } from '../shared/anchor';
+import type { Annotation } from '../shared/storage-types';
+
+/** The layer's only way out is sendToBackground, so that is what we fake. */
+const bus = vi.hoisted(() => ({ send: vi.fn() }));
+vi.mock('../shared/messages', () => ({ sendToBackground: bus.send }));
+
+const PAGE =
+  '<h1>Attention</h1>' +
+  '<p id="first">Transformers replaced <a href="/rnn">recurrent networks</a> entirely.</p>' +
+  '<p id="second">The model scales quadratically with sequence length.</p>';
+
+let layer: AnnotationLayer;
+let stored: Annotation[];
+let nextId = 0;
+
+/** A note saved earlier against the text currently on the page. */
+function savedNote(quote: string, extra: Partial<Annotation> = {}): Annotation {
+  const index = buildTextIndex();
+  const start = index.text.indexOf(quote);
+  if (start < 0) throw new Error(`Not on the page: ${quote}`);
+  const position = { start, end: start + quote.length };
+  nextId += 1;
+  return {
+    id: `note-${nextId}`,
+    pageId: 'page-1',
+    text: quote,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    deleted: false,
+    target: { source: 'https://example.com/paper', quote: quoteAt(index.text, position), position },
+    ...extra,
+  };
+}
+
+function spans(id?: string): HTMLElement[] {
+  const selector = id === undefined
+    ? `[${HIGHLIGHT_ATTRIBUTE}]`
+    : `[${HIGHLIGHT_ATTRIBUTE}="${id}"]`;
+  return [...document.querySelectorAll<HTMLElement>(selector)];
+}
+
+function card(): HTMLElement {
+  return document.getElementById('smart-tab-notes-annotations')!.shadowRoot!
+    .querySelector<HTMLElement>('.card')!;
+}
+
+function click(label: string): void {
+  const button = [...card().querySelectorAll('button')].find((element) => element.textContent === label);
+  if (!button) throw new Error(`Missing button: ${label}. Card shows: ${card().textContent}`);
+  button.click();
+}
+
+/** Let the layer's messages resolve and its timers run. */
+async function settle(ms = 5_000): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms);
+}
+
+function sentPayloads(kind: string): unknown[] {
+  return bus.send.mock.calls.filter((call) => call[0] === kind).map((call) => call[1]);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+    window.setTimeout(() => callback(0), 16));
+  vi.stubGlobal('cancelAnimationFrame', window.clearTimeout);
+  document.body.innerHTML = PAGE;
+  stored = [];
+  nextId = 0;
+
+  bus.send.mockImplementation(async (kind: string, payload: Record<string, string>) => {
+    switch (kind) {
+      case 'annotations:list':
+        return { ok: true, data: { annotations: stored.filter((note) => !note.deleted) } };
+      case 'annotations:save': {
+        nextId += 1;
+        const annotation = {
+          id: `saved-${nextId}`, pageId: 'page-1', createdAt: 2_000, updatedAt: 2_000,
+          deleted: false, ...payload,
+        } as unknown as Annotation;
+        stored.push(annotation);
+        return { ok: true, data: { ok: true, annotation } };
+      }
+      case 'annotations:update': {
+        const existing = stored.find((note) => note.id === payload.id);
+        if (!existing) return { ok: true, data: { ok: false, reason: 'This note no longer exists.' } };
+        existing.note = payload.note === '' ? undefined : payload.note;
+        return { ok: true, data: { ok: true, annotation: { ...existing } } };
+      }
+      case 'annotations:delete': {
+        const existing = stored.find((note) => note.id === payload.id);
+        if (existing) existing.deleted = true;
+        return { ok: true, data: { ok: existing !== undefined } };
+      }
+      default:
+        return { ok: true, data: { ok: true } };
+    }
+  });
+});
+
+afterEach(() => {
+  layer?.dispose();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('putting saved notes back on the page', () => {
+  it('draws every note whose quote is still there, and leaves the text alone', async () => {
+    stored = [savedNote('Transformers replaced recurrent networks entirely.'), savedNote('quadratically')];
+    const before = document.body.textContent;
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(sentPayloads('annotations:list')).toEqual([{ url: location.href }]);
+    expect(spans('note-1')).toHaveLength(3);
+    expect(spans('note-2')).toHaveLength(1);
+    expect(document.body.textContent).toBe(before);
+    expect(document.querySelector('a')!.getAttribute('href')).toBe('/rnn');
+  });
+
+  it('draws a quote in full when another note sits inside it', async () => {
+    // The inner highlight splits the text node the outer one needs, so a
+    // single index snapshot would clamp the outer quote to the text before it.
+    const outer = 'The model scales quadratically with sequence length.';
+    stored = [savedNote(outer), savedNote('scales quadratically')];
+    const before = document.body.textContent;
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans('note-1').map((span) => span.textContent).join('')).toBe(outer);
+    expect(spans('note-2').map((span) => span.textContent).join('')).toBe('scales quadratically');
+    expect(document.body.textContent).toBe(before);
+  });
+
+  it('draws two quotes that only partly overlap', async () => {
+    stored = [savedNote('The model scales'), savedNote('scales quadratically')];
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans('note-1').map((span) => span.textContent).join('')).toBe('The model scales');
+    expect(spans('note-2').map((span) => span.textContent).join('')).toBe('scales quadratically');
+  });
+
+  it('draws nothing and asks for nothing when the page has no saved notes', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+    expect(spans()).toEqual([]);
+    expect(sentPayloads('annotations:anchorState')).toEqual([]);
+  });
+
+  it('finds a quote whose wording changed, and says so in the card', async () => {
+    stored = [savedNote('The model scales quadratically with sequence length.')];
+    document.querySelector('#second')!.textContent =
+      'The model scales quadratically with the sequence length.';
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    const painted = spans('note-1');
+    expect(painted).toHaveLength(1);
+    expect(painted[0]!.textContent).toContain('with the sequence length');
+
+    painted[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    expect(card().textContent).toContain('The page has changed here');
+  });
+
+  it('keeps a note whose text has gone, and marks it orphaned', async () => {
+    stored = [savedNote('Transformers replaced recurrent networks entirely.')];
+    document.querySelector('#first')!.textContent =
+      'This article is about the migratory patterns of arctic terns.';
+
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans()).toEqual([]);
+    expect(sentPayloads('annotations:anchorState')).toEqual([{ id: 'note-1', orphaned: true }]);
+    // The note itself was never deleted.
+    expect(stored.filter((note) => !note.deleted)).toHaveLength(1);
+  });
+
+  it('places a late note on a page that never stops mutating', async () => {
+    const quote = 'Lazily rendered conclusion.';
+    const index = buildTextIndex();
+    stored = [{
+      id: 'note-late', pageId: 'page-1', text: quote, createdAt: 1, updatedAt: 1, deleted: false,
+      target: {
+        source: 'https://example.com/paper',
+        quote: { exact: quote, prefix: '', suffix: '' },
+        position: { start: index.text.length, end: index.text.length + quote.length },
+      },
+    }];
+
+    layer = installAnnotationLayer();
+
+    // A ticker beating faster than the debounce. The first pass runs from
+    // load() and finds nothing; every pass after it is the debounce's to
+    // schedule, and an uncapped one is reset on every beat and never runs.
+    const ticker = document.createElement('div');
+    document.body.append(ticker);
+    const beat = window.setInterval(() => {
+      ticker.textContent = `tick ${Date.now()}`;
+    }, 100);
+
+    await settle(3_000);
+    expect(spans()).toEqual([]);
+
+    const late = document.createElement('p');
+    late.textContent = quote;
+    document.body.append(late);
+    await settle(3_000);
+    window.clearInterval(beat);
+
+    expect(spans('note-late')).toHaveLength(1);
+  });
+
+  it('does not report an anchoring result that storage already holds', async () => {
+    stored = [savedNote('quadratically', { orphaned: false })];
+    layer = installAnnotationLayer();
+    await settle();
+
+    expect(spans('note-1')).toHaveLength(1);
+    expect(sentPayloads('annotations:anchorState')).toEqual([]);
+  });
+
+  it('places a note that only appears once the page has rendered', async () => {
+    const index = buildTextIndex();
+    const quote = 'Lazily rendered conclusion.';
+    stored = [{
+      id: 'note-late', pageId: 'page-1', text: quote, createdAt: 1, updatedAt: 1, deleted: false,
+      target: {
+        source: 'https://example.com/paper',
+        quote: { exact: quote, prefix: '', suffix: '' },
+        position: { start: index.text.length, end: index.text.length + quote.length },
+      },
+    }];
+
+    layer = installAnnotationLayer();
+    await settle();
+    expect(spans()).toEqual([]);
+
+    const late = document.createElement('p');
+    late.textContent = quote;
+    document.body.append(late);
+    await settle();
+
+    expect(spans('note-late')).toHaveLength(1);
+    // Orphaned first, then placed: both results reach storage, in order.
+    expect(sentPayloads('annotations:anchorState')).toEqual([
+      { id: 'note-late', orphaned: true },
+      { id: 'note-late', orphaned: false },
+    ]);
+  });
+
+  it('puts the card back when the page takes its highlight away and it returns', async () => {
+    stored = [savedNote('The model scales quadratically with sequence length.', { note: 'Kept' })];
+    layer = installAnnotationLayer();
+    await settle();
+    spans('note-1')[0]!.click();
+    expect(card().hidden).toBe(false);
+
+    document.querySelector('#second')!.textContent =
+      'The model scales quadratically with the sequence length.';
+    await settle();
+
+    expect(spans('note-1')).toHaveLength(1);
+    expect(card().hidden).toBe(false);
+    expect(card().textContent).toContain('Kept');
+  });
+
+  it('redraws a highlight the page has thrown away', async () => {
+    stored = [savedNote('The model scales quadratically with sequence length.')];
+    layer = installAnnotationLayer();
+    await settle();
+    expect(spans('note-1')).toHaveLength(1);
+
+    // What editing the text in devtools does: the text node is replaced.
+    document.querySelector('#second')!.textContent =
+      'The model scales quadratically with the sequence length of the input.';
+    await settle();
+
+    const painted = spans('note-1');
+    expect(painted).toHaveLength(1);
+    expect(painted[0]!.textContent).toContain('quadratically');
+  });
+});
+
+describe('the note card', () => {
+  beforeEach(async () => {
+    stored = [savedNote('quadratically', {
+      note: 'Why squared?',
+      explanation: 'Every token attends to every other token, so cost grows with the square.',
+    })];
+    layer = installAnnotationLayer();
+    await settle();
+  });
+
+  it('shows the quote, the note and the explanation on hover, and hides again', async () => {
+    expect(card().hidden).toBe(true);
+    spans('note-1')[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+
+    expect(card().hidden).toBe(false);
+    expect(card().textContent).toContain('quadratically');
+    expect(card().textContent).toContain('Why squared?');
+    expect(card().textContent).toContain('Every token attends to every other token');
+
+    document.querySelector('h1')!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    await settle();
+    expect(card().hidden).toBe(true);
+  });
+
+  it('opens on click, stays open, and closes on Escape', () => {
+    spans('note-1')[0]!.click();
+    expect(card().hidden).toBe(false);
+    document.querySelector('h1')!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    vi.advanceTimersByTime(1_000);
+    expect(card().hidden).toBe(false);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(card().hidden).toBe(true);
+  });
+
+  it('stays open when the quote begins with something parked off screen', async () => {
+    // Wikipedia's citation labels sit thousands of pixels above the page.
+    stored = [savedNote('Transformers replaced recurrent networks entirely.')];
+    layer = installAnnotationLayer();
+    await settle();
+
+    const painted = spans('note-2');
+    expect(painted.length).toBeGreaterThan(1);
+    vi.spyOn(painted[0]!, 'getBoundingClientRect')
+      .mockReturnValue({ top: -120_000, bottom: -119_800, left: 0, right: 10 } as DOMRect);
+
+    painted[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    expect(card().hidden).toBe(false);
+    expect(card().textContent).toContain('Transformers replaced recurrent networks');
+  });
+
+  it('edits a note through storage and shows the saved text', async () => {
+    spans('note-1')[0]!.click();
+    click('Edit note');
+    const field = card().querySelector('textarea')!;
+    expect(field.value).toBe('Why squared?');
+
+    field.value = 'Because of the attention matrix.';
+    card().querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    await settle();
+
+    expect(sentPayloads('annotations:update'))
+      .toEqual([{ id: 'note-1', note: 'Because of the attention matrix.' }]);
+    expect(card().textContent).toContain('Because of the attention matrix.');
+    expect(card().querySelector('textarea')).toBeNull();
+  });
+
+  it('deletes a note, takes the highlight out, and restores the text', async () => {
+    spans('note-1')[0]!.click();
+    click('Delete');
+    await settle();
+
+    expect(sentPayloads('annotations:delete')).toEqual([{ id: 'note-1' }]);
+    expect(spans()).toEqual([]);
+    expect(document.querySelector('#second')!.innerHTML)
+      .toBe('The model scales quadratically with sequence length.');
+    expect(card().hidden).toBe(true);
+  });
+
+  it('says so when storage refuses an edit instead of looking saved', async () => {
+    spans('note-1')[0]!.click();
+    click('Edit note');
+    stored = [];
+    card().querySelector('textarea')!.value = 'Lost note';
+    card().querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    await settle();
+
+    expect(card().textContent).toContain('no longer exists');
+  });
+});
+
+describe('saving a new highlight', () => {
+  it('stores both selectors, draws the highlight, and says it was drawn', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+
+    const paragraph = document.querySelector('#second')!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const result = await layer.save({ range, text: paragraph.textContent!, note: 'Mine' });
+    await settle();
+
+    expect(result).toEqual({ ok: true, drawn: true });
+    const payload = sentPayloads('annotations:save')[0] as {
+      url: string; title: string; text: string; note: string;
+      target: { source: string; quote: { exact: string; prefix: string; suffix: string };
+        position: { start: number; end: number } };
+    };
+    expect(payload.url).toBe(location.href);
+    expect(payload.note).toBe('Mine');
+    expect(payload.text).toBe('The model scales quadratically with sequence length.');
+    expect(payload.target.quote.exact).toBe('The model scales quadratically with sequence length.');
+    expect(payload.target.quote.prefix.endsWith('recurrent networks entirely. ')).toBe(true);
+    expect(payload.target.quote.suffix).toBe('');
+    expect(payload.target.position.end - payload.target.position.start)
+      .toBe(payload.target.quote.exact.length);
+
+    expect(spans('saved-1')).toHaveLength(1);
+    expect(document.body.textContent).toContain('The model scales quadratically');
+    // The card opens on the new highlight: that is the confirmation.
+    expect(card().hidden).toBe(false);
+    expect(card().textContent).toContain('Mine');
+  });
+
+  it('opens the card later when the page was still settling at save time', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+
+    const paragraph = document.querySelector('#second')!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    // The page replaces the quoted text while the save is in flight, so the
+    // first anchoring pass finds nothing.
+    bus.send.mockImplementationOnce(async (_kind: string, payload: Record<string, string>) => {
+      paragraph.textContent = 'Rendering...';
+      const annotation = {
+        id: 'saved-late', pageId: 'page-1', createdAt: 2_000, updatedAt: 2_000,
+        deleted: false, ...payload,
+      } as unknown as Annotation;
+      stored.push(annotation);
+      return { ok: true, data: { ok: true, annotation } };
+    });
+    const result = await layer.save({ range, text: paragraph.textContent! });
+    expect(result).toEqual({ ok: true, drawn: false });
+    expect(card().hidden).toBe(true);
+
+    paragraph.textContent = 'The model scales quadratically with sequence length.';
+    await settle();
+    expect(spans('saved-late')).toHaveLength(1);
+    expect(card().hidden).toBe(false);
+  });
+
+  it('reports a refusal from storage rather than drawing anything', async () => {
+    layer = installAnnotationLayer();
+    await settle();
+    bus.send.mockResolvedValueOnce({ ok: true, data: { ok: false, reason: 'Pages must use HTTP(S).' } });
+
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('#first')!);
+    const result = await layer.save({ range, text: 'Transformers' });
+
+    expect(result).toEqual({ ok: false, reason: 'Pages must use HTTP(S).' });
+    expect(spans()).toEqual([]);
+  });
+});
+
+describe('lifecycle', () => {
+  it('installs one host, and a second install replaces the first', async () => {
+    stored = [savedNote('quadratically')];
+    layer = installAnnotationLayer();
+    await settle();
+
+    layer = installAnnotationLayer();
+    await settle();
+    expect(document.querySelectorAll('#smart-tab-notes-annotations')).toHaveLength(1);
+    expect(spans('note-1')).toHaveLength(1);
+  });
+
+  it('takes its highlights and its card out of the page on disposal', async () => {
+    stored = [savedNote('quadratically')];
+    const before = document.body.innerHTML;
+    layer = installAnnotationLayer();
+    await settle();
+    expect(spans()).toHaveLength(1);
+
+    layer.dispose();
+    expect(document.getElementById('smart-tab-notes-annotations')).toBeNull();
+    expect(spans()).toEqual([]);
+    expect(document.body.innerHTML).toBe(before);
+  });
+});
