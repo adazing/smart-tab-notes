@@ -46,7 +46,7 @@ src/
                 runs Explain/Ask (explain.ts) and owns saved notes (notes.ts)
   content/      runs in every page: selection menu, saved-note highlights and cards
   extract/      page text extractor, injected only when a tab is read
-  sidepanel/    React side panel (Chat, This page, Library)
+  sidepanel/    React side panel (Chat, Notes, Library)
   shared/       message bus, types, storage, getTabContext, chunker,
                 backend client (api.ts) and its URL (config.ts)
 backend/        FastAPI + LangGraph server
@@ -76,6 +76,8 @@ Add a row when you add a message to `MessageContracts` in
 | `annotations:delete` | content/side panel → background | `{ id }` | `Ack` |
 | `annotations:anchorState` | content → background | `{ id, orphaned }` | `Ack` |
 | `annotations:changed` | background → side panels and tabs on that page | `{ url }` | `Ack` |
+| `annotations:focus` | content → background | `{ id }` | `Ack` (opens the side panel if it may, then sends `annotations:focused`) |
+| `annotations:focused` | background → side panels | `{ id, tabId, windowId }` | `Ack` (shows that note in Notes) |
 | `annotations:reveal` | side panel → content | `{ id }` | `Ack` (scrolls to the highlight and opens its card) |
 | `sidepanel:navigate` | any → side panel | `{ view }` | `Ack` |
 | `sidepanel:ready` | side panel → background | `{}` | `Ack` |
@@ -85,7 +87,7 @@ events from tabs. Every open side panel (one per window) gets every
 `tabs:changed` and `page:selectionChanged`; `usePageState` ignores other windows
 and tabs.
 
-**Notes are highlights.** The selection menu is Explain, Ask and Highlight.
+**Notes are highlights.** The selection menu is Explain, Ask and Note.
 Everything saved goes through the annotation layer
 ([`content/annotationLayer.ts`](src/content/annotationLayer.ts)), so it is drawn
 on the page and comes back on every visit. Clicking a highlight opens its card:
@@ -144,9 +146,10 @@ normalized (no `#hash`, tracking params or trailing slash).
 
 ## Saved notes
 
-Highlight and Note in the selection toolbar save a note and draw it. Each note
-stores the W3C selector pair in `target`: a TextQuoteSelector (the quote plus 32
-characters either side) and a TextPositionSelector. Both come from the page's
+Note in the selection toolbar, and Save as note under an Explain or Ask
+answer, both save a note and draw it. Each note stores the W3C selector pair
+in `target`: a TextQuoteSelector (the quote plus 32 characters either side)
+and a TextPositionSelector. Both come from the page's
 text with whitespace collapsed, which
 [`src/content/textIndex.ts`](src/content/textIndex.ts) builds along with a map
 back to the DOM.
@@ -156,14 +159,14 @@ saved, then anywhere the surrounding text agrees best, then fuzzily with
 diff-match-patch (70% of it has to survive). What it finds is wrapped in
 highlight spans, one per text node, styled inline with paint-only properties so
 the page's layout and links are untouched. Hovering, clicking or tabbing to one
-opens a card with the note, the AI explanation, Edit and Delete. A quote that
-cannot be found is marked `orphaned` rather than deleted, and the side panel's
-**This page** lists those.
+opens a card with the note, the AI answer and the tabs it drew on, and buttons
+for Write/Edit note, Explain (when there is no explanation yet) and Delete.
+A quote that cannot be found is marked `orphaned` rather than deleted, and the
+side panel's **Notes** view lists those.
 
 Known rough edges:
 - A fuzzy match can start or end a word or two off; the card says it's approximate.
 - Overlapping highlights nest rather than merge.
-- `explanation` is shown but nothing writes it yet (the explain flow is still a mock).
 - Only the page's own DOM: no PDFs, iframes or other shadow roots.
 - Stack Overflow blocks `npm run test:anchors -- --sites`, like `test:sites`.
 
@@ -176,4 +179,4 @@ couldn't (`restricted`, `pdf`, `not_loaded`, `error`).
 Sites that extract badly:
 - **List pages** (e.g. the Hacker News front page) come out as a flat list of links.
 - **PDFs** aren't supported yet.
-- **Medium and Stack Overflow** block `npm run test:sites`; check them in the browser with **This page → Developer tools → Extract text**.
+- **Medium and Stack Overflow** block `npm run test:sites`; check them in the browser with **Notes → Developer tools → Extract text**.
