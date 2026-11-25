@@ -61,6 +61,16 @@ function card(): HTMLElement {
     .querySelector<HTMLElement>('.card')!;
 }
 
+/**
+ * A hover, the way a pointer makes one: it moves, then lands on the target.
+ * The layer ignores a mouseover with no movement behind it, because that is
+ * what the page does when a highlight is painted under a still pointer.
+ */
+function hover(target: Element): void {
+  document.dispatchEvent(new Event('mousemove', { bubbles: true }));
+  target.dispatchEvent(new Event('mouseover', { bubbles: true }));
+}
+
 function click(label: string): void {
   const button = [...card().querySelectorAll('button')].find((element) => element.textContent === label);
   if (!button) throw new Error(`Missing button: ${label}. Card shows: ${card().textContent}`);
@@ -182,7 +192,7 @@ describe('putting saved notes back on the page', () => {
     expect(painted).toHaveLength(1);
     expect(painted[0]!.textContent).toContain('with the sequence length');
 
-    painted[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    hover(painted[0]!);
     expect(card().textContent).toContain('The page has changed here');
   });
 
@@ -318,14 +328,14 @@ describe('the note card', () => {
 
   it('shows the quote, the note and the explanation on hover, and hides again', async () => {
     expect(card().hidden).toBe(true);
-    spans('note-1')[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    hover(spans('note-1')[0]!);
 
     expect(card().hidden).toBe(false);
     expect(card().textContent).toContain('quadratically');
     expect(card().textContent).toContain('Why squared?');
     expect(card().textContent).toContain('Every token attends to every other token');
 
-    document.querySelector('h1')!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    hover(document.querySelector('h1')!);
     await settle();
     expect(card().hidden).toBe(true);
   });
@@ -333,7 +343,7 @@ describe('the note card', () => {
   it('opens on click, stays open, and closes on Escape', () => {
     spans('note-1')[0]!.click();
     expect(card().hidden).toBe(false);
-    document.querySelector('h1')!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    hover(document.querySelector('h1')!);
     vi.advanceTimersByTime(1_000);
     expect(card().hidden).toBe(false);
 
@@ -352,7 +362,7 @@ describe('the note card', () => {
     vi.spyOn(painted[0]!, 'getBoundingClientRect')
       .mockReturnValue({ top: -120_000, bottom: -119_800, left: 0, right: 10 } as DOMRect);
 
-    painted[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    hover(painted[0]!);
     expect(card().hidden).toBe(false);
     expect(card().textContent).toContain('Transformers replaced recurrent networks');
   });
@@ -518,6 +528,46 @@ describe('notes are highlights', () => {
     expect(field.placeholder).toBe('Add a note (optional)');
   });
 
+  it('keeps the note box of a new note when the pointer rests on another highlight', async () => {
+    // The toolbar click that saves a note leaves the pointer on the text,
+    // and painting the highlight fires mouseover there with no movement
+    // behind it. That used to open the hovered note's card instead, taking
+    // the box -- and anything typed into it -- with it.
+    stored = [savedNote('Transformers replaced')];
+    layer = installAnnotationLayer();
+    await settle();
+    const other = spans('note-1')[0]!;
+
+    await layer.save({ range: selectionOf('#second'), text: 'The model scales', editNote: true });
+    other.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    await settle();
+
+    expect(card().hidden).toBe(false);
+    expect(card().querySelector('textarea')).not.toBeNull();
+    expect(card().textContent).toContain('The model scales');
+  });
+
+  it('stays closed after Escape when a mouseover lands without the pointer moving', async () => {
+    // Closing the card changes what sits under a still pointer, and the
+    // browser fires mouseover for it. Honouring that reopened the card on
+    // the next highlight along, 6ms after the user dismissed it.
+    stored = [savedNote('Transformers replaced'), savedNote('The model scales')];
+    layer = installAnnotationLayer();
+    await settle();
+    hover(spans('note-1')[0]!);
+    expect(card().hidden).toBe(false);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(card().hidden).toBe(true);
+    // A different highlight, so dismissedId does not cover it; no movement.
+    spans('note-2')[0]!.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    expect(card().hidden).toBe(true);
+
+    // The pointer really moves there: now it opens.
+    hover(spans('note-2')[0]!);
+    expect(card().hidden).toBe(false);
+  });
+
   it('explains a saved highlight from its card and stores the answer on it', async () => {
     stored = [savedNote('quadratically')];
     layer = installAnnotationLayer({ requireUserGesture: false });
@@ -552,7 +602,7 @@ describe('notes are highlights', () => {
     layer = installAnnotationLayer();
     await settle();
     const span = spans('note-1')[0]!;
-    const over = (target: Element) => target.dispatchEvent(new Event('mouseover', { bubbles: true }));
+    const over = (target: Element) => hover(target);
     over(span);
     expect(card().hidden).toBe(false);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

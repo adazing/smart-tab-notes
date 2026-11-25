@@ -176,6 +176,15 @@ export function installAnnotationLayer(options: { requireUserGesture?: boolean }
   let editing = false;
   let hoveringCard = false;
   let restoringFocus = false;
+  /**
+   * Whether the pointer has moved since the last card close. A mouseover
+   * says "this element is now under the pointer", which is also true when
+   * the element arrives rather than the pointer: painting a highlight and
+   * closing the card both change what is under a pointer that never moved,
+   * and the browser fires mouseover for it. Only a real move counts as a
+   * hover.
+   */
+  let pointerMoved = false;
   let hideTimer: number | undefined;
   let anchorTimer: number | undefined;
   /** When the open debounce window has to give way and run. */
@@ -378,6 +387,10 @@ export function installAnnotationLayer(options: { requireUserGesture?: boolean }
 
   function closeCard(restoreFocus = false): void {
     window.clearTimeout(hideTimer);
+    // Closing moves the page under the pointer. Wait for a real move before
+    // treating what lands beneath it as a hover, or Escape reopens the card
+    // on whichever highlight the pointer happens to be resting on.
+    pointerMoved = false;
     // restoreFocus means the user closed it on purpose (Escape or Close).
     if (restoreFocus) dismissedId = openId;
     const entry = openId === null ? undefined : entries.get(openId);
@@ -723,10 +736,16 @@ export function installAnnotationLayer(options: { requireUserGesture?: boolean }
    * Page events
    * ---------------------------------------------------------------- */
 
+  document.addEventListener('mousemove', () => { pointerMoved = true; }, { signal, passive: true });
+
   document.addEventListener('mouseover', (event) => {
     const id = highlightIdAt(event.target);
     if (id !== dismissedId) dismissedId = null;
-    if (id) { if (id !== dismissedId) openCard(id, false); }
+    // A hover must not take the card off an open editor: the box, and
+    // anything typed into it, would go with it. Saving a note opens its
+    // card in edit mode, and the pointer is usually left resting on a
+    // highlight by the toolbar click that saved it.
+    if (id) { if (id !== dismissedId && !editing && pointerMoved) openCard(id, false); }
     else if (!event.composedPath().includes(host)) scheduleHide();
   }, { signal });
 
