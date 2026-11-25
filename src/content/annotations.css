@@ -14,3 +14,7 @@ button.quiet { background: #f1f2f5; }
 button:focus-visible, textarea:focus-visible { outline: 2px solid #2f6df6; outline-offset: -2px; }
 textarea { display: block; width: 100%; padding: 8px; border: 1px solid #89919d; border-radius: 4px; background: #fff; color: #1b1d21; font: inherit; resize: vertical; min-height: 72px; max-height: 160px; }
 .status { margin-top: 8px; color: #8a2b1f; }
+.question { font-weight: 600; margin-bottom: 4px; }
+.sources { margin-top: 6px; font-size: 12px; }
+.sources a { color: #2f6df6; }
+textarea::placeholder { color: #6a7076; }

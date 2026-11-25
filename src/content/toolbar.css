@@ -13,3 +13,13 @@ textarea { resize: vertical; min-height: 72px; max-height: 160px; }
 .submit { background: #e8efff; margin-top: 6px; }
 .status { margin: 0; white-space: pre-wrap; }
 .highlight { position: fixed; background: #ffc94055; border-radius: 2px; pointer-events: none; }
+.row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.question { margin: 0 0 6px; font-weight: 600; white-space: pre-wrap; }
+.answer { margin: 0 0 8px; white-space: pre-wrap; }
+.sources { margin: 0 0 8px; color: #5a6069; font-size: 12px; }
+.error { margin: 6px 0 0; color: #a1260d; white-space: pre-wrap; }
+.detail > label { margin-top: 4px; font-weight: 500; font-size: 13px; }
+.loading::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px; border: 2px solid #c5cbd6; border-top-color: #2f6df6; border-radius: 50%; animation: stn-spin .8s linear infinite; }
+@keyframes stn-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading::before { animation: none; } }
+button:disabled { opacity: .6; cursor: default; }

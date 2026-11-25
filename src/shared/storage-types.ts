@@ -14,10 +14,17 @@ export interface PageInput {
   title: string;
 }
 
+/** Another tab an AI explanation drew on. Tab ids don't survive restarts, so keep the URL. */
+export interface AnnotationSource {
+  title: string;
+  url: string;
+}
+
 export interface AnnotationInput {
   pageId: string;
   /** The highlighted text, for display in lists that have no page open. */
   text: string;
+  /** The user's own note. */
   note?: string;
   /**
    * Quote, surrounding text and character offsets, so the highlight can be
@@ -25,8 +32,12 @@ export interface AnnotationInput {
    * one (no DOM, a PDF) still get a saved note, it just never re-anchors.
    */
   target?: AnnotationTarget;
-  /** The AI explanation shown with the note. Filled in by the explain flow. */
+  /** The AI explanation, or the AI's answer to `question`. */
   explanation?: string;
+  /** The question the user asked with Ask, if any. */
+  question?: string;
+  /** Other tabs the explanation drew on. */
+  sources?: AnnotationSource[];
 }
 
 export interface ChatSummaryInput {
@@ -50,7 +61,7 @@ export interface Annotation extends RecordMetadata, AnnotationInput {
 export interface ChatSummary extends RecordMetadata, ChatSummaryInput {}
 export interface Collection extends RecordMetadata, CollectionInput {}
 export type AnnotationUpdate = Partial<
-  Pick<AnnotationInput, 'text' | 'note' | 'target' | 'explanation'>
+  Pick<AnnotationInput, 'text' | 'note' | 'target' | 'explanation' | 'question' | 'sources'>
 >;
 export interface StorageRecords {
   pages: Page;

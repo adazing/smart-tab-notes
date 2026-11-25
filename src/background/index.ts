@@ -6,6 +6,7 @@
  *   - answer tab queries for the side panel (it has no direct tabs access
  *     pattern we want to spread around; everything goes through here)
  *   - relay selection events from content scripts to the side panel
+ *   - toolbar Explain/Ask (explain.ts) and saved notes (notes.ts)
  *
  * Remember this worker is torn down when idle. Keep state in
  * chrome.storage, not in module variables.
@@ -17,32 +18,14 @@ import {
   type MessageHandler,
   type MessageKind,
 } from '../shared/messages';
-import { isFromExtensionPage, isFromTab, mayReachUrl } from '../shared/senders';
-import {
-  addAnnotation,
-  getPageByUrl,
-  listAnnotations,
-  savePage,
-  setAnnotationOrphaned,
-  softDelete,
-  updateAnnotation,
-} from '../shared/storage';
+import { isFromExtensionPage, isFromTab } from '../shared/senders';
+import { runExplain } from './explain';
+import { callerOf, deleteNote, listNotes, saveNote, setAnchorState, updateNote } from './notes';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
+import { FOCUSED_NOTE_KEY } from '../shared/types';
 
 const LOG = '[smart-tab-notes:bg]';
-
-/** Refused because the sender asked about a page other than its own. */
-const OTHER_PAGE = 'These notes belong to another page.';
-
-/**
- * Storage rejects for reasons the caller can act on -- a URL we refuse to
- * save, a note that has since been deleted -- so failures come back as a
- * reason rather than a dead message channel.
- */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /* ------------------------------------------------------------------ *
  * Side panel wiring
@@ -83,28 +66,16 @@ function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHand
   };
 }
 
-/**
- * Saved notes are reached from two places: the content script in the tab a
- * note is on, and the side panel. Anything else -- another extension, a web
- * page with no content script of ours -- is refused.
- */
-function notesCallers<K extends MessageKind>(kind: K, handler: MessageHandler<K>): MessageHandler<K> {
-  return (payload, sender) => {
-    if (!isFromExtensionPage(sender, EXTENSION_ORIGIN) && !isFromTab(sender, EXTENSION_ORIGIN)) {
-      throw new Error(`"${kind}" is not answered for ${sender.url ?? 'unknown sender'}`);
-    }
-    return handler(payload, sender);
-  };
-}
-
 /* ------------------------------------------------------------------ *
  * Message handlers
  * ------------------------------------------------------------------ */
 
 registerHandlers('background', {
-  // No logging or persistence of selected text, questions, or notes in Week 1.
-  'toolbar:action': async (_payload, sender) =>
-    isFromTab(sender, EXTENSION_ORIGIN) ? { ok: true } : { ok: false, reason: 'not from a tab' },
+  /** Toolbar Explain and Ask. Reads the sender's tab and others in its window. */
+  'explain:run': async (payload, sender) => {
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || !sender.tab) return { ok: false, error: 'Not from a tab.' };
+    return runExplain(payload, sender.tab);
+  },
 
   'ping': async () => ({ ok: true, endpoint: 'background', at: Date.now() }),
 
@@ -141,67 +112,51 @@ registerHandlers('background', {
    * Saved notes. The worker owns storage; content scripts ask for it.
    * ---------------------------------------------------------------- */
 
-  'annotations:save': notesCallers('annotations:save', async ({ url, title, text, note, target }, sender) => {
-    try {
-      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
-        return { ok: false, reason: OTHER_PAGE };
-      }
-      const page = await savePage({ url, title });
-      const annotation = await addAnnotation({
-        pageId: page.id,
-        text,
-        ...(note !== undefined ? { note } : {}),
-        ...(target !== undefined ? { target } : {}),
-      });
-      return { ok: true, annotation };
-    } catch (error) {
-      console.warn(LOG, 'could not save a note:', error);
-      return { ok: false, reason: describe(error) };
-    }
-  }),
+  // Saved notes (highlights). See notes.ts for who may touch which notes.
+  'annotations:save': async (payload, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? saveNote(payload, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
 
-  'annotations:list': notesCallers('annotations:list', async ({ url }, sender) => {
-    try {
-      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
-        return { annotations: [], reason: OTHER_PAGE };
-      }
-      const page = await getPageByUrl(url);
-      if (!page) return { annotations: [] };
-      return { annotations: await listAnnotations(page.id) };
-    } catch (error) {
-      console.warn(LOG, 'could not read notes:', error);
-      return { annotations: [], reason: describe(error) };
-    }
-  }),
+  'annotations:list': async ({ url }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? listNotes(url, caller) : { annotations: [], reason: 'Unknown sender.' };
+  },
 
-  'annotations:update': notesCallers('annotations:update', async ({ id, note }) => {
-    try {
-      // The page sends '' for a note the user emptied; store no note at all.
-      const annotation = await updateAnnotation(id, { note: note === '' ? undefined : note });
-      if (!annotation) return { ok: false, reason: 'This note no longer exists.' };
-      return { ok: true, annotation };
-    } catch (error) {
-      return { ok: false, reason: describe(error) };
-    }
-  }),
+  'annotations:update': async (payload, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? updateNote(payload, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
 
-  'annotations:delete': notesCallers('annotations:delete', async ({ id }) => {
-    try {
-      const deleted = await softDelete('annotations', id);
-      return deleted ? { ok: true } : { ok: false, reason: 'This note no longer exists.' };
-    } catch (error) {
-      return { ok: false, reason: describe(error) };
-    }
-  }),
+  'annotations:delete': async ({ id }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? deleteNote(id, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
 
-  'annotations:anchorState': notesCallers('annotations:anchorState', async ({ id, orphaned }) => {
-    try {
-      const stored = await setAnnotationOrphaned(id, orphaned);
-      return stored === undefined ? { ok: false, reason: 'This note no longer exists.' } : { ok: true };
-    } catch (error) {
-      return { ok: false, reason: describe(error) };
+  /**
+   * The user clicked a note's highlighted text: show that note in the side
+   * panel, opening the panel if it is closed.
+   */
+  'annotations:focus': async ({ id }, sender) => {
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || sender.tab?.id === undefined || typeof id !== 'string') {
+      return { ok: false, reason: 'not from a tab' };
     }
-  }),
+    const { id: tabId, windowId } = sender.tab;
+    // Before any await: opening the panel is only allowed while the click's
+    // user gesture is still live. If the browser says no, the card on the
+    // page still shows the note.
+    const opened = chrome.sidePanel.open({ windowId }).then(() => true, () => false);
+    // A panel that is only now opening misses the message below; it reads this.
+    await chrome.storage.session.set({ [FOCUSED_NOTE_KEY]: { id, tabId, windowId, at: Date.now() } }).catch(() => {});
+    await opened;
+    await notify('sidepanel', 'annotations:focused', { id, tabId, windowId });
+    return { ok: true };
+  },
+
+  'annotations:anchorState': async ({ id, orphaned }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? setAnchorState(id, orphaned, caller) : { ok: false, reason: 'Unknown sender.' };
+  },
 
   /**
    * Content scripts report selections here rather than straight to the side

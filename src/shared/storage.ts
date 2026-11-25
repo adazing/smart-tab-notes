@@ -50,16 +50,28 @@ export async function getPageByUrl(url: string): Promise<Page | undefined> {
 export async function addAnnotation(input: AnnotationInput): Promise<Annotation> {
   return await db.transaction('rw', db.pages, db.annotations, async () => {
     await requirePage(input.pageId);
-    const annotation: Annotation = {
-      pageId: input.pageId, text: input.text,
-      ...(input.note !== undefined ? { note: input.note } : {}),
-      ...(input.target !== undefined ? { target: input.target } : {}),
-      ...(input.explanation !== undefined ? { explanation: input.explanation } : {}),
-      ...metadata(),
-    };
+    // Explicit allowlist, as in updateAnnotation: untyped callers can't set metadata.
+    const annotation: Annotation = { pageId: input.pageId, text: input.text, ...metadata() };
+    if (input.note !== undefined) annotation.note = input.note;
+    if (input.target !== undefined) annotation.target = input.target;
+    if (input.explanation !== undefined) annotation.explanation = input.explanation;
+    if (input.question !== undefined) annotation.question = input.question;
+    if (input.sources !== undefined) {
+      annotation.sources = input.sources.map(({ title, url }) => ({ title, url }));
+    }
     await db.annotations.add(annotation);
     return annotation;
   });
+}
+
+/** An active annotation and the page it belongs to, or `undefined`. */
+export async function getAnnotationWithPage(
+  id: string,
+): Promise<{ annotation: Annotation; page: Page } | undefined> {
+  const annotation = await db.annotations.get(id);
+  if (!annotation || annotation.deleted) return undefined;
+  const page = await db.pages.get(annotation.pageId);
+  return page ? { annotation, page } : undefined;
 }
 
 export async function listAnnotations(pageId: string): Promise<Annotation[]> {
@@ -79,6 +91,10 @@ export async function updateAnnotation(
     if (Object.hasOwn(changes, 'note')) annotation.note = changes.note;
     if (Object.hasOwn(changes, 'target')) annotation.target = changes.target;
     if (Object.hasOwn(changes, 'explanation')) annotation.explanation = changes.explanation;
+    if (Object.hasOwn(changes, 'question')) annotation.question = changes.question;
+    if (Object.hasOwn(changes, 'sources')) {
+      annotation.sources = changes.sources?.map(({ title, url }) => ({ title, url }));
+    }
     await db.annotations.put(annotation);
     return annotation;
   });
