@@ -17,7 +17,7 @@ import {
   type MessageHandler,
   type MessageKind,
 } from '../shared/messages';
-import { isFromExtensionPage, isFromTab } from '../shared/senders';
+import { isFromExtensionPage, isFromTab, mayReachUrl } from '../shared/senders';
 import {
   addAnnotation,
   getPageByUrl,
@@ -31,6 +31,9 @@ import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
 
 const LOG = '[smart-tab-notes:bg]';
+
+/** Refused because the sender asked about a page other than its own. */
+const OTHER_PAGE = 'These notes belong to another page.';
 
 /**
  * Storage rejects for reasons the caller can act on -- a URL we refuse to
@@ -80,6 +83,20 @@ function extensionPagesOnly<K extends MessageKind>(kind: K, handler: MessageHand
   };
 }
 
+/**
+ * Saved notes are reached from two places: the content script in the tab a
+ * note is on, and the side panel. Anything else -- another extension, a web
+ * page with no content script of ours -- is refused.
+ */
+function notesCallers<K extends MessageKind>(kind: K, handler: MessageHandler<K>): MessageHandler<K> {
+  return (payload, sender) => {
+    if (!isFromExtensionPage(sender, EXTENSION_ORIGIN) && !isFromTab(sender, EXTENSION_ORIGIN)) {
+      throw new Error(`"${kind}" is not answered for ${sender.url ?? 'unknown sender'}`);
+    }
+    return handler(payload, sender);
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Message handlers
  * ------------------------------------------------------------------ */
@@ -124,8 +141,11 @@ registerHandlers('background', {
    * Saved notes. The worker owns storage; content scripts ask for it.
    * ---------------------------------------------------------------- */
 
-  'annotations:save': async ({ url, title, text, note, target }) => {
+  'annotations:save': notesCallers('annotations:save', async ({ url, title, text, note, target }, sender) => {
     try {
+      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
+        return { ok: false, reason: OTHER_PAGE };
+      }
       const page = await savePage({ url, title });
       const annotation = await addAnnotation({
         pageId: page.id,
@@ -138,10 +158,13 @@ registerHandlers('background', {
       console.warn(LOG, 'could not save a note:', error);
       return { ok: false, reason: describe(error) };
     }
-  },
+  }),
 
-  'annotations:list': async ({ url }) => {
+  'annotations:list': notesCallers('annotations:list', async ({ url }, sender) => {
     try {
+      if (!mayReachUrl(sender, url, EXTENSION_ORIGIN)) {
+        return { annotations: [], reason: OTHER_PAGE };
+      }
       const page = await getPageByUrl(url);
       if (!page) return { annotations: [] };
       return { annotations: await listAnnotations(page.id) };
@@ -149,9 +172,9 @@ registerHandlers('background', {
       console.warn(LOG, 'could not read notes:', error);
       return { annotations: [], reason: describe(error) };
     }
-  },
+  }),
 
-  'annotations:update': async ({ id, note }) => {
+  'annotations:update': notesCallers('annotations:update', async ({ id, note }) => {
     try {
       // The page sends '' for a note the user emptied; store no note at all.
       const annotation = await updateAnnotation(id, { note: note === '' ? undefined : note });
@@ -160,25 +183,25 @@ registerHandlers('background', {
     } catch (error) {
       return { ok: false, reason: describe(error) };
     }
-  },
+  }),
 
-  'annotations:delete': async ({ id }) => {
+  'annotations:delete': notesCallers('annotations:delete', async ({ id }) => {
     try {
       const deleted = await softDelete('annotations', id);
       return deleted ? { ok: true } : { ok: false, reason: 'This note no longer exists.' };
     } catch (error) {
       return { ok: false, reason: describe(error) };
     }
-  },
+  }),
 
-  'annotations:anchorState': async ({ id, orphaned }) => {
+  'annotations:anchorState': notesCallers('annotations:anchorState', async ({ id, orphaned }) => {
     try {
       const stored = await setAnnotationOrphaned(id, orphaned);
       return stored === undefined ? { ok: false, reason: 'This note no longer exists.' } : { ok: true };
     } catch (error) {
       return { ok: false, reason: describe(error) };
     }
-  },
+  }),
 
   /**
    * Content scripts report selections here rather than straight to the side
