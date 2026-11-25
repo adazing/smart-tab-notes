@@ -188,6 +188,41 @@ describe('putting saved notes back on the page', () => {
     expect(stored.filter((note) => !note.deleted)).toHaveLength(1);
   });
 
+  it('places a late note on a page that never stops mutating', async () => {
+    const quote = 'Lazily rendered conclusion.';
+    const index = buildTextIndex();
+    stored = [{
+      id: 'note-late', pageId: 'page-1', text: quote, createdAt: 1, updatedAt: 1, deleted: false,
+      target: {
+        source: 'https://example.com/paper',
+        quote: { exact: quote, prefix: '', suffix: '' },
+        position: { start: index.text.length, end: index.text.length + quote.length },
+      },
+    }];
+
+    layer = installAnnotationLayer();
+
+    // A ticker beating faster than the debounce. The first pass runs from
+    // load() and finds nothing; every pass after it is the debounce's to
+    // schedule, and an uncapped one is reset on every beat and never runs.
+    const ticker = document.createElement('div');
+    document.body.append(ticker);
+    const beat = window.setInterval(() => {
+      ticker.textContent = `tick ${Date.now()}`;
+    }, 100);
+
+    await settle(3_000);
+    expect(spans()).toEqual([]);
+
+    const late = document.createElement('p');
+    late.textContent = quote;
+    document.body.append(late);
+    await settle(3_000);
+    window.clearInterval(beat);
+
+    expect(spans('note-late')).toHaveLength(1);
+  });
+
   it('does not report an anchoring result that storage already holds', async () => {
     stored = [savedNote('quadratically', { orphaned: false })];
     layer = installAnnotationLayer();

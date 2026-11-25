@@ -29,6 +29,14 @@ const HOST_ID = 'smart-tab-notes-annotations';
 /** How long to wait for the page to settle before re-anchoring. */
 const MUTATION_DEBOUNCE = 400;
 
+/**
+ * The longest a run of page mutations may hold re-anchoring off. The
+ * debounce waits for the page to settle; a page that never settles -- a
+ * ticker, a carousel, a polling feed -- would otherwise reset it forever
+ * and its notes would be neither drawn nor orphaned for the whole visit.
+ */
+const MAX_MUTATION_WAIT = 2_000;
+
 /** Waits between the attempts that follow the first one, in milliseconds. */
 const RETRY_DELAYS = [600, 1_600, 4_000];
 
@@ -122,6 +130,8 @@ export function installAnnotationLayer(): AnnotationLayer {
   let restoringFocus = false;
   let hideTimer: number | undefined;
   let anchorTimer: number | undefined;
+  /** When the open debounce window has to give way and run. */
+  let anchorDeadline: number | null = null;
   let retries = 0;
   let frame = 0;
   let url = location.href;
@@ -253,9 +263,29 @@ export function installAnnotationLayer(): AnnotationLayer {
     }
   }
 
+  /**
+   * Re-anchor once the page has been quiet for `delay`.
+   *
+   * Mutations keep pushing that back, so the wait is capped: the first
+   * schedule of a window sets a deadline and later ones cannot postpone the
+   * run past it. A retry names its own longer wait and owns the timing, so
+   * it is not capped -- it is waiting for a page that has not rendered yet,
+   * not for one that will not sit still.
+   */
   function scheduleAnchor(delay = MUTATION_DEBOUNCE): void {
+    const now = Date.now();
+    const capped = delay === MUTATION_DEBOUNCE;
+    if (!capped) anchorDeadline = null;
+    else if (anchorDeadline === null) anchorDeadline = now + MAX_MUTATION_WAIT;
+    const wait = anchorDeadline === null
+      ? delay
+      : Math.max(0, Math.min(delay, anchorDeadline - now));
     window.clearTimeout(anchorTimer);
-    anchorTimer = window.setTimeout(() => anchorPending(), delay);
+    anchorTimer = window.setTimeout(() => {
+      anchorTimer = undefined;
+      anchorDeadline = null;
+      anchorPending();
+    }, wait);
   }
 
   /* ---------------------------------------------------------------- *
@@ -591,6 +621,9 @@ export function installAnnotationLayer(): AnnotationLayer {
     url = location.href;
     retries = 0;
     confirmId = null;
+    window.clearTimeout(anchorTimer);
+    anchorTimer = undefined;
+    anchorDeadline = null;
     void load();
   }
   window.addEventListener('popstate', navigated, { signal });
@@ -606,6 +639,8 @@ export function installAnnotationLayer(): AnnotationLayer {
     observer.disconnect();
     window.clearTimeout(hideTimer);
     window.clearTimeout(anchorTimer);
+    anchorTimer = undefined;
+    anchorDeadline = null;
     window.clearInterval(navigationTimer);
     cancelAnimationFrame(frame);
     for (const entry of entries.values()) undraw(entry);
