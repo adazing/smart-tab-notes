@@ -115,7 +115,10 @@ export function buildTextIndex(root: Node = document.body): TextIndex {
   });
 
   let pendingSpace = false;
-  let previousBlock: Element | null = null;
+  // `null` is a real value here: a text run whose nearest ancestor is BODY
+  // has no block of its own. `undefined` is the distinct "no run seen yet"
+  // state, so that the first boundary is not mistaken for a repeat.
+  let previousBlock: Element | null | undefined;
 
   function appendSpace(): void {
     // An unmapped character: a paragraph break is between nodes, not in one.
@@ -134,7 +137,7 @@ export function buildTextIndex(root: Node = document.body): TextIndex {
     if (data.length === 0) continue;
 
     const block = closestBlock(textNode);
-    if (previousBlock !== null && block !== previousBlock) pendingSpace = true;
+    if (previousBlock !== undefined && block !== previousBlock) pendingSpace = true;
     previousBlock = block;
 
     let index = 0;

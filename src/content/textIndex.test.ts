@@ -63,6 +63,16 @@ describe('buildTextIndex', () => {
     }
   });
 
+  it('keeps the boundary space when the first run is not inside a block', () => {
+    // BODY is not a block tag, so the nearest block of a bare text run is
+    // null. That must not read as "same block as the run before".
+    document.body.innerHTML = 'Intro text<div>Chapter one</div>';
+    expect(buildTextIndex().text).toBe('Intro text Chapter one');
+
+    document.body.innerHTML = '<span>Hello</span><p>World</p>';
+    expect(buildTextIndex().text).toBe('Hello World');
+  });
+
   it('returns an empty index for an empty page rather than failing', () => {
     document.body.innerHTML = '';
     expect(buildTextIndex()).toEqual({ text: '', segments: [] });
