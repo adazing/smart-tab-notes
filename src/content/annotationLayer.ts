@@ -504,6 +504,13 @@ export function installAnnotationLayer(): AnnotationLayer {
       console.debug('[smart-tab-notes] could not read saved notes:', result.error);
       return;
     }
+    // The worker answers a failed read with an empty list and a reason.
+    // That list is not evidence about the page, and the loop below reads it
+    // as the whole truth: every entry missing from it is dropped.
+    if (result.data.reason !== undefined) {
+      console.debug('[smart-tab-notes] could not read saved notes:', result.data.reason);
+      return;
+    }
 
     const saved = result.data.annotations ?? [];
     const keep = new Set(saved.map((annotation) => annotation.id));

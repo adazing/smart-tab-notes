@@ -105,9 +105,19 @@ function NotesCard({ url }: { url: string }): JSX.Element {
 
   const read = useCallback(async (): Promise<Annotation[] | null> => {
     const result = await sendToBackground('annotations:list', { url });
-    if (result.ok) return result.data.annotations;
-    setError(result.error);
-    return null;
+    if (!result.ok) {
+      setError(result.error);
+      return null;
+    }
+    // A read the worker could not do comes back as an empty list and a
+    // reason. Left unread, a storage failure looked like a page with no
+    // notes on it.
+    if (result.data.reason !== undefined) {
+      setError(result.data.reason);
+      return null;
+    }
+    setError('');
+    return result.data.annotations;
   }, [url]);
 
   useEffect(() => {
