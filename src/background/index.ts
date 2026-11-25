@@ -6,7 +6,7 @@
  *   - answer tab queries for the side panel (it has no direct tabs access
  *     pattern we want to spread around; everything goes through here)
  *   - relay selection events from content scripts to the side panel
- *   - toolbar Explain/Ask (explain.ts) and Save (annotations.ts)
+ *   - toolbar Explain/Ask (explain.ts) and saved notes (notes.ts)
  *
  * Remember this worker is torn down when idle. Keep state in
  * chrome.storage, not in module variables.

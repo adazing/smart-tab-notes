@@ -9,6 +9,8 @@ import { getTabContext } from '../shared/tabContext';
 
 vi.mock('../shared/tabContext', () => ({ getTabContext: vi.fn() }));
 
+const ORIGIN = 'chrome-extension://abc/';
+
 const tab = (id: number, url: string, extra: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab =>
   ({ id, url, title: `Tab ${id}`, windowId: 1, groupId: -1, status: 'complete', discarded: false, ...extra }) as chrome.tabs.Tab;
 
@@ -110,8 +112,12 @@ describe('runExplain', () => {
 describe('saved notes in the worker', () => {
   const page = tab(1, 'https://site1.example/article?utm_source=x', { title: 'Article' });
   const other = tab(2, 'https://site2.example/');
-  const fromPage: Caller = { kind: 'tab', tab: page };
-  const fromOther: Caller = { kind: 'tab', tab: other };
+  // A content script caller: mayUse holds it to the frame that sent the
+  // message, so the sender carries that frame's URL.
+  const fromTab = (t: chrome.tabs.Tab): Caller =>
+    ({ kind: 'tab', tab: t, sender: { tab: t, url: t.url }, origin: ORIGIN });
+  const fromPage = fromTab(page);
+  const fromOther = fromTab(other);
   const panel: Caller = { kind: 'panel' };
   const sentToTabs: unknown[] = [];
 
@@ -196,9 +202,19 @@ describe('saved notes in the worker', () => {
   });
 
   it('only lets the side panel and tabs in', () => {
-    const origin = 'chrome-extension://abc/';
-    expect(callerOf({ url: origin + 'sidepanel.html' }, origin)).toEqual({ kind: 'panel' });
-    expect(callerOf({ url: 'https://site1.example/', tab: page }, origin)).toEqual({ kind: 'tab', tab: page });
-    expect(callerOf({ url: 'https://elsewhere.example/' }, origin)).toBeNull();
+    const sender = { url: 'https://site1.example/', tab: page };
+    expect(callerOf({ url: ORIGIN + 'sidepanel.html' }, ORIGIN)).toEqual({ kind: 'panel' });
+    expect(callerOf(sender, ORIGIN)).toEqual({ kind: 'tab', tab: page, sender, origin: ORIGIN });
+    expect(callerOf({ url: 'https://elsewhere.example/' }, ORIGIN)).toBeNull();
+  });
+
+  it('refuses a subframe that names the page its tab is showing', async () => {
+    // The sending frame is an ad iframe; the tab is on site1. Checking the
+    // tab's URL instead of the frame's would let the frame write site1's notes.
+    const iframe: Caller = {
+      kind: 'tab', tab: page, sender: { tab: page, url: 'https://ads.example/frame' }, origin: ORIGIN,
+    };
+    expect(await save(iframe)).toEqual({ ok: false, reason: 'This page has changed. Select the text again.' });
+    expect(await getPageByUrl(page.url!)).toBeUndefined();
   });
 });
