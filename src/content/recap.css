@@ -1,0 +1,16 @@
+:host { all: initial !important; position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; z-index: 2147483645 !important; pointer-events: none !important; color-scheme: light; }
+* { box-sizing: border-box; }
+.popup { position: fixed; right: 16px; bottom: 16px; width: 272px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow: auto; pointer-events: auto; background: #fff; color: #1b1d21; border: 1px solid #d4d8e0; border-radius: 8px; box-shadow: 0 4px 20px #0003; font: 14px/1.5 system-ui, sans-serif; text-align: left; padding: 10px 12px; }
+[hidden] { display: none !important; }
+p { margin: 0; overflow-wrap: anywhere; }
+.count { font-weight: 600; }
+.ask { color: #5c6473; }
+.actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+button { appearance: none; border: 0; background: #e8efff; color: #1b1d21; border-radius: 5px; padding: 6px 10px; min-height: 32px; cursor: pointer; font: inherit; }
+button:hover { background: #d7e3ff; }
+button.quiet { background: #f1f2f5; }
+button:focus-visible { outline: 2px solid #2f6df6; outline-offset: -2px; }
+button:disabled { opacity: .6; cursor: default; }
+.status { margin-top: 8px; color: #8a2b1f; }
+@media (prefers-reduced-motion: no-preference) { .popup { animation: stn-recap-in .18s ease-out; } }
+@keyframes stn-recap-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

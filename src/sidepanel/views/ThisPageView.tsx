@@ -1,6 +1,7 @@
 /**
- * "Notes" view: the notes saved on the page in view. Every note is a
- * highlight on the page, possibly with no text yet.
+ * "Notes" view: the recap of what the reader learned on the page in view,
+ * and the notes saved on it. Every note is a highlight on the page,
+ * possibly with no text yet.
  *
  * Clicking a note here jumps to its highlight on the page, and clicking
  * highlighted text on the page brings its note up here (`focus`). The week 1
@@ -8,12 +9,14 @@
  * collapsed "Developer tools" section at the bottom.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { isNoReceiverError, sendToBackground, sendToTab } from '../../shared/messages';
+import { normalizeUrl } from '../../shared/normalize-url';
+import { savedCount } from '../../shared/recapText';
 import type { Annotation } from '../../shared/storage-types';
-import type { TabContext } from '../../shared/types';
+import type { PageRecap, TabContext } from '../../shared/types';
 import type { PageState } from '../usePageState';
-import { useAnnotations } from '../useAnnotations';
+import { useAnnotations, type AnnotationsState } from '../useAnnotations';
 
 const EXTRACTOR_LABELS: Record<NonNullable<TabContext['extractor']>, string> = {
   'stack-exchange': 'Stack Exchange rule',
@@ -91,6 +94,15 @@ function PageTextCard({ tabId }: { tabId: number }): JSX.Element {
   );
 }
 
+/** Same page, as storage sees it (no #hash, tracking params or trailing slash). */
+function samePage(a: string, b: string): boolean {
+  try {
+    return normalizeUrl(a) === normalizeUrl(b);
+  } catch {
+    return false;
+  }
+}
+
 /** Jump to a note's highlight on the page: scroll, flash and open its card. */
 async function revealNote(tabId: number, id: string): Promise<string | null> {
   const result = await sendToTab(tabId, 'annotations:reveal', { id });
@@ -104,8 +116,8 @@ async function revealNote(tabId: number, id: string): Promise<string | null> {
  * on the page. A note whose text the page no longer contains is marked
  * rather than lost: the highlight is gone from the page, not from the user.
  */
-function NotesCard({ url, tabId, focus }: { url: string | null; tabId: number; focus: NoteFocus }): JSX.Element {
-  const { annotations, loading, error, reload } = useAnnotations(url);
+function NotesCard({ tabId, focus, notes }: { tabId: number; focus: NoteFocus; notes: AnnotationsState }): JSX.Element {
+  const { annotations, loading, error, reload } = notes;
   const [message, setMessage] = useState<{ id: string; text: string } | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   /** The note being edited, and the text in its box. */
@@ -261,6 +273,125 @@ function NotesCard({ url, tabId, focus }: { url: string | null; tabId: number; f
   );
 }
 
+/**
+ * What the reader learned on this page, from POST /recap through the worker
+ * (which caches it until the page's notes change).
+ *
+ * The card is only here when there is something to recap. It builds the
+ * recap when the reader asks for it -- here, or with "See what you learned?"
+ * on the page itself, which arrives as `recapRequest`. That request names
+ * the page it was made on, so switching the panel to another tab does not
+ * spend a recap on a page nobody asked about.
+ */
+function RecapCard({ url, notes, recapRequest }: {
+  url: string; notes: AnnotationsState; recapRequest: RecapRequest;
+}): JSX.Element | null {
+  const [recap, setRecap] = useState<PageRecap | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [error, setError] = useState('');
+  /** Only the latest request may update the card. */
+  const request = useRef(0);
+  /** The ask already acted on, so one ask builds one recap. */
+  const handled = useRef<number | null>(null);
+
+  const load = useCallback(async (refresh = false): Promise<void> => {
+    const id = ++request.current;
+    setState('loading');
+    setError('');
+    const result = await sendToBackground('recap:get', { url, refresh });
+    if (id !== request.current) return;
+    if (result.ok && result.data.ok && result.data.recap) {
+      setRecap(result.data.recap);
+      setState('idle');
+      return;
+    }
+    setError(result.ok ? result.data.reason ?? 'Could not build a recap.' : result.error);
+    setState('error');
+  }, [url]);
+
+  // A different page has a different recap.
+  useEffect(() => {
+    request.current += 1;
+    setRecap(null);
+    setState('idle');
+    setError('');
+  }, [url]);
+
+  /** When this page's recap was asked for on the page, if it was. */
+  const asked = recapRequest && samePage(recapRequest.url, url) ? recapRequest.at : null;
+
+  // Asked for on the page: show it without another click.
+  useEffect(() => {
+    if (asked === null || handled.current === asked) return;
+    handled.current = asked;
+    void load();
+  }, [asked, load]);
+
+  const noteCount = notes.annotations.length;
+  // Nothing saved and nothing asked for: no card at all.
+  if (noteCount === 0 && recap === null && asked === null) return null;
+
+  const counted = savedCount(recap?.noteCount ?? noteCount, recap?.summaryCount ?? 0);
+  // Only count changes are visible from here; an edited note is caught by the
+  // worker's fingerprint when the recap is built again.
+  const stale = recap !== null && recap.noteCount !== noteCount;
+
+  return (
+    <div className="card">
+      <h3 className="card__title">What you learned here</h3>
+      {state === 'loading' && <p className="muted" role="status">Writing your recap...</p>}
+      {state === 'error' && (
+        <p className="notice">
+          {error}{' '}
+          <button type="button" className="link-button" onClick={() => void load(true)}>Try again</button>
+        </p>
+      )}
+      {recap && (
+        <>
+          {recap.summary && <p className="recap__summary">{recap.summary}</p>}
+          {recap.points.length > 0 && (
+            <ul className="recap__points">
+              {recap.points.map((point, index) => <li key={index}>{point}</li>)}
+            </ul>
+          )}
+          {stale && <p className="note__flag">Your notes have changed since this recap.</p>}
+          <p className="note__meta">
+            {counted ? `From ${counted}` : 'From this page'}
+            {' · '}
+            <button type="button" className="link-button" onClick={() => void load(true)}>
+              {stale ? 'Update recap' : 'Build it again'}
+            </button>
+          </p>
+        </>
+      )}
+      {!recap && state !== 'loading' && (
+        <>
+          {counted !== '' && <p className="muted">{`You have ${counted} here.`}</p>}
+          <button type="button" className="button" onClick={() => void load()}>
+            See what you learned
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The recap and the notes for one page. They share one notes list, so a
+ * saved or deleted note moves both at once and storage is read once.
+ */
+function PageCards({ url, tabId, focus, recapRequest }: {
+  url: string; tabId: number; focus: NoteFocus; recapRequest: RecapRequest;
+}): JSX.Element {
+  const notes = useAnnotations(url);
+  return (
+    <>
+      <RecapCard url={url} notes={notes} recapRequest={recapRequest} />
+      <NotesCard tabId={tabId} focus={focus} notes={notes} />
+    </>
+  );
+}
+
 /** Tools for checking the week 1 plumbing. Collapsed: users don't need them. */
 function DeveloperTools({ page }: { page: PageState }): JSX.Element {
   const { activeTab, selection } = page;
@@ -315,12 +446,16 @@ function DeveloperTools({ page }: { page: PageState }): JSX.Element {
 /** A note to bring into view; `at` makes each request new. */
 export type NoteFocus = { id: string; at: number } | null;
 
+/** A recap asked for on the page itself; `at` makes each ask a new request. */
+export type RecapRequest = { url: string; at: number } | null;
+
 interface ThisPageViewProps {
   page: PageState;
   focus?: NoteFocus;
+  recapRequest?: RecapRequest;
 }
 
-export function ThisPageView({ page, focus = null }: ThisPageViewProps): JSX.Element {
+export function ThisPageView({ page, focus = null, recapRequest = null }: ThisPageViewProps): JSX.Element {
   const { activeTab, loading, refresh } = page;
 
   if (loading && !activeTab) {
@@ -343,7 +478,7 @@ export function ThisPageView({ page, focus = null }: ThisPageViewProps): JSX.Ele
       <h2 className="page__title">{activeTab.title || 'Untitled page'}</h2>
 
       {activeTab.accessible ? (
-        <NotesCard url={activeTab.url} tabId={activeTab.tabId} focus={focus} />
+        <PageCards url={activeTab.url} tabId={activeTab.tabId} focus={focus} recapRequest={recapRequest} />
       ) : (
         <p className="notice">
           The browser doesn't let extensions work on this page (browser settings, new tab

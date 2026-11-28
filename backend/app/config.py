@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     chat_history_messages: int = 10
     rank_suggest_threshold: float = 0.3
 
+    # Recap (/recap): how much of a page's notes and chat summaries to send.
+    recap_notes_token_budget: int = 3000
+    recap_per_note_token_budget: int = 300
+    recap_summaries_token_budget: int = 1000
+
     # Every OpenAI call: give up after this many seconds (one retry), and cap
     # how long an answer can get.
     openai_timeout_s: float = 30

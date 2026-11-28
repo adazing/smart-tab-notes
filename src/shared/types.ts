@@ -233,3 +233,37 @@ export interface AnchorMatch extends TextPositionSelector {
  * Value: `{ id, tabId, windowId, at }`.
  */
 export const FOCUSED_NOTE_KEY = 'focusedNote';
+
+
+/* ------------------------------------------------------------------ *
+ * Recap: what you learned on a page you are opening again
+ * ------------------------------------------------------------------ */
+
+/** A page's recap, built by POST /recap from its notes and chat summaries. */
+export interface PageRecap {
+  /** A short paragraph: what the page covered and what the reader took from it. */
+  summary: string;
+  /** Up to five short points, one per thing they marked. */
+  points: string[];
+  /** How many notes and chat summaries it was built from. */
+  noteCount: number;
+  summaryCount: number;
+  /** When the backend answered, in UTC milliseconds. */
+  builtAt: number;
+}
+
+/**
+ * chrome.storage.session key: the page whose recap the user just asked for on
+ * the page itself, so a side panel that opens because of that click still
+ * knows to show it. Value: `{ url, windowId, at }`.
+ */
+export const RECAP_REQUEST_KEY = 'recapRequest';
+
+/**
+ * chrome.storage.session keys the worker keeps the recap state under: which
+ * pages have already offered a recap this session (`{ [url]: at }`), and the
+ * recaps built so far (`{ [url]: { recap, fingerprint } }`). Session, not
+ * local: a new browser session is a new reading session.
+ */
+export const RECAP_SEEN_KEY = 'recapSeen';
+export const RECAP_CACHE_KEY = 'recapCache';

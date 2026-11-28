@@ -236,3 +236,48 @@ export async function postRankTabs(request: RankTabsRequest, signal?: AbortSigna
   const { scores } = await postJson<{ scores: TabScore[] }>('/rank-tabs', request, 15_000, signal);
   return scores;
 }
+
+/* ------------------------------------------------------------------ *
+ * POST /recap
+ * ------------------------------------------------------------------ */
+
+/** One saved note, as /recap wants it. */
+export interface RecapNote {
+  text: string;
+  note?: string;
+  question?: string;
+  explanation?: string;
+}
+
+export interface RecapRequest {
+  title?: string;
+  url?: string;
+  /** Oldest first. At least one note or chat summary is required. */
+  notes?: RecapNote[];
+  chat_summaries?: string[];
+}
+
+export interface RecapResponse {
+  recap: string;
+  points: string[];
+}
+
+/** The backend's own limits on /recap (docs/api.md). */
+export const RECAP_LIMITS = {
+  title: 1_000,
+  url: 4_096,
+  notes: 200,
+  noteText: 20_000,
+  note: 10_000,
+  question: 2_000,
+  explanation: 10_000,
+  summaries: 50,
+  summaryChars: 10_000,
+} as const;
+
+/** One model call, like /explain; leave room for a retry on the server. */
+const RECAP_TIMEOUT_MS = 70_000;
+
+export function postRecap(request: RecapRequest, signal?: AbortSignal): Promise<RecapResponse> {
+  return postJson<RecapResponse>('/recap', request, RECAP_TIMEOUT_MS, signal);
+}

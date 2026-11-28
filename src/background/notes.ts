@@ -59,7 +59,7 @@ export function callerOf(sender: chrome.runtime.MessageSender, origin: string): 
  * The side panel passes the URL of whichever tab it is showing, so it keeps
  * any.
  */
-function mayUse(caller: Caller, url: string): boolean {
+export function mayUse(caller: Caller, url: string): boolean {
   return caller.kind === 'panel' || mayReachUrl(caller.sender, url, caller.origin);
 }
 

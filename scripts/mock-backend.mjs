@@ -88,6 +88,31 @@ async function chat(body, _req, res, cors) {
   return undefined;
 }
 
+/** The first few words of a string, for canned prose that quotes its input. */
+const opening = (text, count = 8) => String(text ?? '').trim().split(/\s+/).slice(0, count).join(' ');
+
+/**
+ * POST /recap: a canned recap of the notes and chat summaries it was given,
+ * quoting each one so a test can tell its own notes apart.
+ */
+function recap(body) {
+  const notes = (body.notes ?? []).filter((note) => note?.text?.trim());
+  const summaries = (body.chat_summaries ?? []).filter((summary) => summary?.trim());
+  if (!notes.length && !summaries.length) {
+    return [422, { detail: [{ msg: 'a recap needs at least one note or chat summary' }] }];
+  }
+  const where = body.title || body.url || 'this page';
+  const counted = [
+    notes.length ? `${notes.length} note${notes.length === 1 ? '' : 's'}` : '',
+    summaries.length ? `${summaries.length} chat summar${summaries.length === 1 ? 'y' : 'ies'}` : '',
+  ].filter(Boolean).join(' and ');
+  const points = [
+    ...notes.map((note) => `You marked "${opening(note.text)}"${note.note ? ` and wrote "${opening(note.note)}"` : ''}.`),
+    ...summaries.map((summary) => `You chatted about "${opening(summary)}".`),
+  ].slice(0, 5);
+  return [200, { recap: `Mock recap of "${where}": you saved ${counted} here.`, points }];
+}
+
 /** POST /rank-tabs: share of question words found in the title, url and snippet. */
 function rankTabs(body) {
   const asked = words(body.question ?? '');
@@ -106,6 +131,7 @@ export const routes = {
   'POST /explain': explain,
   'POST /chat': chat,
   'POST /rank-tabs': rankTabs,
+  'POST /recap': recap,
 };
 
 /**

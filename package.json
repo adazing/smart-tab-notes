@@ -17,6 +17,7 @@
     "test:sites": "vite-node scripts/site-check.ts",
     "test:anchors": "vite-node scripts/anchor-check.ts",
     "test:storage": "vitest run src/shared",
+    "test:recap": "vite-node scripts/recap-check.ts",
     "mock-backend": "node scripts/mock-backend.mjs"
   },
   "dependencies": {

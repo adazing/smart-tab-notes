@@ -636,3 +636,24 @@ body {
   box-shadow: 0 0 0 2px var(--accent);
   transition: box-shadow 0.3s;
 }
+
+/* Recap (What you learned here) ------------------------------------- */
+
+.recap__summary {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recap__points {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.recap__points li {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.recap__summary + .recap__points {
+  margin-top: 8px;
+}

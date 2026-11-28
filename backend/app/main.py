@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from app import llm
 from app.agents.chat import chat_graph, rank_tabs
 from app.agents.explain import explain_graph
+from app.agents.recap import recap_graph
 from app.llm import MissingAPIKeyError
 from app.config import get_settings
 from app.schemas import (
@@ -20,6 +21,8 @@ from app.schemas import (
     ExplainResponse,
     RankTabsRequest,
     RankTabsResponse,
+    RecapRequest,
+    RecapResponse,
 )
 
 logger = logging.getLogger("uvicorn.error")
@@ -63,6 +66,27 @@ async def explain(req: ExplainRequest) -> ExplainResponse:
         logger.exception("/explain failed")
         raise HTTPException(status_code=502, detail="The explanation service failed. Try again.") from exc
     return ExplainResponse(explanation=result["explanation"], used_tab_ids=result["used_tab_ids"])
+
+
+@app.post("/recap", response_model=RecapResponse)
+async def recap(req: RecapRequest) -> RecapResponse:
+    """Remind a reader what they learned on a page: their notes and chats, recapped."""
+    try:
+        result = await run_in_threadpool(
+            recap_graph.invoke,
+            {
+                "title": req.title,
+                "url": req.url,
+                "notes": [n.model_dump() for n in req.notes],
+                "chat_summaries": req.chat_summaries,
+            },
+        )
+    except MissingAPIKeyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("/recap failed")
+        raise HTTPException(status_code=502, detail="The recap service failed. Try again.") from exc
+    return RecapResponse(recap=result["recap"], points=result["points"])
 
 
 def _sse(event: str, data: dict) -> str:

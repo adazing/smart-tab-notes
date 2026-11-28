@@ -29,6 +29,7 @@ import type {
   ExplainResult,
   ExplainRun,
   PageContext,
+  PageRecap,
   SelectionInfo,
   SidePanelView,
   TabContext,
@@ -233,6 +234,46 @@ export interface MessageContracts {
   'annotations:anchorState': {
     request: { id: string; orphaned: boolean };
     response: Ack;
+  };
+
+  /* ---------------------------------------------------------------- *
+   * Recap: "you have notes here, see what you learned?"
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Page -> worker, once the page has loaded: is there anything saved here,
+   * and should the page offer a recap? `show` is true only the first time a
+   * page with notes asks in a browser session, so the offer is made once.
+   * The counts come back either way, for a page that wants to say so quietly.
+   */
+  'recap:check': {
+    request: { url: string };
+    response: { show: boolean; noteCount: number; summaryCount: number };
+  };
+
+  /**
+   * Page -> worker: the user took up the offer. The worker opens the side
+   * panel if it may, and tells it with `recap:show`.
+   */
+  'recap:open': {
+    request: { url: string };
+    response: Ack;
+  };
+
+  /** Worker -> side panels: show this page's recap in Notes. */
+  'recap:show': {
+    request: { url: string; windowId: number; at: number };
+    response: Ack;
+  };
+
+  /**
+   * Side panel -> worker: the page's recap, built from its notes and chat
+   * summaries (POST /recap). Cached until those change; `refresh` builds a
+   * new one anyway.
+   */
+  'recap:get': {
+    request: { url: string; refresh?: boolean };
+    response: { ok: boolean; recap?: PageRecap; cached?: boolean; reason?: string };
   };
 }
 

@@ -1,5 +1,6 @@
 """The OpenAI wrappers in app/llm.py, with the OpenAI clients faked."""
 
+import os
 import logging
 import subprocess
 import sys
@@ -15,6 +16,23 @@ from app.config import Settings, get_settings
 
 BACKEND = Path(__file__).resolve().parent.parent
 
+
+def minimal_env(**extra: str) -> dict[str, str]:
+    """
+    A deliberately bare environment for a child process: nothing on PATH, so
+    the child cannot find anything by accident.
+
+    SystemRoot is the exception. On Windows, importing asyncio loads the
+    _overlapped extension, which starts Winsock, which needs SystemRoot to
+    find its providers; without it the child dies on import. Passing it does
+    not weaken the test: it says nothing about where the backend looks for
+    its .env.
+    """
+    env = {"PATH": "", **extra}
+    root = os.environ.get("SystemRoot")
+    if root:
+        env["SystemRoot"] = root
+    return env
 
 @pytest.fixture(autouse=True)
 def fake_key(monkeypatch):
@@ -155,7 +173,7 @@ print(ok("chrome-extension://" + "a" * 32), ok("chrome-extension://" + "b" * 32)
     out = subprocess.run(
         [sys.executable, "-c", code],
         cwd=BACKEND,
-        env={"PYTHONPATH": str(BACKEND), "PATH": "", "EXTENSION_IDS": "a" * 32},
+        env=minimal_env(PYTHONPATH=str(BACKEND), EXTENSION_IDS="a" * 32),
         capture_output=True,
         text=True,
         check=True,

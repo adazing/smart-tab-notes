@@ -6,12 +6,13 @@
  * the user has deliberately selected. That matches the PRD decision that
  * tabs are never read silently.
  *
- * The selection toolbar and the saved-note layer are installed at the
- * bottom of this file.
+ * The selection toolbar, the saved-note layer and the recap popup are
+ * installed at the bottom of this file.
  */
 
 import { touchesEditable } from './selection';
 import { installAnnotationLayer } from './annotationLayer';
+import { installRecapPopup } from './recapPopup';
 import { buildTextIndex, offsetsFromRange } from './textIndex';
 import { installSelectionToolbar } from './toolbar';
 import { ANCHOR_CONTEXT_CHARS, quoteAt } from '../shared/anchor';
@@ -120,3 +121,5 @@ console.debug(LOG, 'ready on', location.href);
 
 const annotations = installAnnotationLayer();
 installSelectionToolbar(annotations);
+// Asks the worker whether anything is saved here, and offers a recap if so.
+installRecapPopup();
