@@ -36,15 +36,18 @@ rebuild click reload on the extension card and reload any open tab you're testin
 | `npm run test:browser` | Build, then toolbar, chat and extractor tests in a real Chromium against the mock backend (run `npx playwright install chromium` once) |
 | `npm run test:sites` | Run the page extractor on 10 real sites |
 | `npm run test:anchors` | Save notes in a real Chromium, reload, check they come back; `-- --sites` adds five live sites |
-| `npm run mock-backend` | Fake backend on port 8000 with canned answers for `/explain`, `/chat` and `/rank-tabs` (no API key). A chat question containing "fail" returns an error event |
+| `npm run test:recap` | Build, then the recap demo in a real Chromium: save notes, close the tab, reopen it, open the recap. Drives Playwright through its library, so it runs on Node 20.17 too |
+| `npm run mock-backend` | Fake backend on port 8000 with canned answers for `/explain`, `/chat`, `/rank-tabs` and `/recap` (no API key). A chat question containing "fail" returns an error event |
 
 ## Layout
 
 ```
 src/
   background/   service worker: answers the side panel, relays page events,
-                runs Explain/Ask (explain.ts) and owns saved notes (notes.ts)
-  content/      runs in every page: selection menu, saved-note highlights and cards
+                runs Explain/Ask (explain.ts), owns saved notes (notes.ts)
+                and builds the page recap (recap.ts)
+  content/      runs in every page: selection menu, saved-note highlights and
+                cards, and the recap popup
   extract/      page text extractor, injected only when a tab is read
   sidepanel/    React side panel (Chat, Notes, Library)
   shared/       message bus, types, storage, getTabContext, chunker,
@@ -79,6 +82,10 @@ Add a row when you add a message to `MessageContracts` in
 | `annotations:focus` | content → background | `{ id }` | `Ack` (opens the side panel if it may, then sends `annotations:focused`) |
 | `annotations:focused` | background → side panels | `{ id, tabId, windowId }` | `Ack` (shows that note in Notes) |
 | `annotations:reveal` | side panel → content | `{ id }` | `Ack` (scrolls to the highlight and opens its card) |
+| `recap:check` | content → background | `{ url }` | `{ show, noteCount, summaryCount }` (`show` is true once per page per session) |
+| `recap:open` | content → background | `{ url }` | `Ack` (opens the side panel if it may, then sends `recap:show`) |
+| `recap:show` | background → side panels | `{ url, windowId, at }` | `Ack` (shows that page's recap in Notes) |
+| `recap:get` | side panel → background | `{ url, refresh? }` | `{ ok, recap?, cached?, reason? }` |
 | `sidepanel:navigate` | any → side panel | `{ view }` | `Ack` |
 | `sidepanel:ready` | side panel → background | `{}` | `Ack` |
 
@@ -169,6 +176,32 @@ Known rough edges:
 - Overlapping highlights nest rather than merge.
 - Only the page's own DOM: no PDFs, iframes or other shadow roots.
 - Stack Overflow blocks `npm run test:anchors -- --sites`, like `test:sites`.
+
+## Recap
+
+When a page you have notes on loads, the content script asks the worker what
+is saved against its normalized URL (`recap:check`) and offers a recap in the
+corner of the page: **You have 3 notes here. See what you learned?**, with
+buttons to open it or dismiss it. The offer is made once per page per browser
+session, whether you take it up or not -- the worker records it when it
+answers the check, so a reload does not bring it back. A page with nothing
+saved is never asked about, and is not recorded, so saving a note there and
+coming back later still gets the offer.
+
+Opening it (`recap:open`) opens the side panel on **Notes**, where **What you
+learned here** shows a short paragraph and up to five points from a new
+`POST /recap` ([docs/api.md](docs/api.md)), built from the page's notes and
+its chat summaries. The worker makes that call, not the page and not the
+panel, because it owns storage; the panel asks for the result with
+`recap:get`. The same card offers the recap to a reader who never saw the
+popup, and **Build it again** rebuilds it on demand.
+
+A recap is cached in `chrome.storage.session` against a fingerprint of the
+notes and chat summaries it was built from, so reopening the panel costs
+nothing while a changed note gets a new recap. `setAnnotationOrphaned` leaves
+`updatedAt` alone, so whether a highlight could be placed on the page does not
+invalidate anything. Both the offer and the cache are session state: a new
+browser session is a new reading session.
 
 ## Page text extraction
 

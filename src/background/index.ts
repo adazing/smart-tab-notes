@@ -6,7 +6,8 @@
  *   - answer tab queries for the side panel (it has no direct tabs access
  *     pattern we want to spread around; everything goes through here)
  *   - relay selection events from content scripts to the side panel
- *   - toolbar Explain/Ask (explain.ts) and saved notes (notes.ts)
+ *   - toolbar Explain/Ask (explain.ts), saved notes (notes.ts) and the
+ *     page recap (recap.ts)
  *
  * Remember this worker is torn down when idle. Keep state in
  * chrome.storage, not in module variables.
@@ -21,9 +22,10 @@ import {
 import { isFromExtensionPage, isFromTab } from '../shared/senders';
 import { runExplain } from './explain';
 import { callerOf, deleteNote, listNotes, saveNote, setAnchorState, updateNote } from './notes';
+import { checkRecap, getRecap } from './recap';
 import { getTabContext } from '../shared/tabContext';
 import { getActiveTabRef, listTabGroups, listTabs } from '../shared/tabs';
-import { FOCUSED_NOTE_KEY } from '../shared/types';
+import { FOCUSED_NOTE_KEY, RECAP_REQUEST_KEY } from '../shared/types';
 
 const LOG = '[smart-tab-notes:bg]';
 
@@ -157,6 +159,48 @@ registerHandlers('background', {
     const caller = callerOf(sender, EXTENSION_ORIGIN);
     return caller ? setAnchorState(id, orphaned, caller) : { ok: false, reason: 'Unknown sender.' };
   },
+
+  /* ---------------------------------------------------------------- *
+   * Recap. A page asks whether to offer one; the side panel builds it.
+   * ---------------------------------------------------------------- */
+
+  'recap:check': async ({ url }, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller
+      ? checkRecap(url, caller)
+      : { show: false, noteCount: 0, summaryCount: 0 };
+  },
+
+  /**
+   * The user asked for the recap on the page itself: show it in the side
+   * panel, opening the panel if the browser lets us.
+   */
+  'recap:open': async ({ url }, sender) => {
+    if (!isFromTab(sender, EXTENSION_ORIGIN) || sender.tab?.windowId === undefined) {
+      return { ok: false, reason: 'not from a tab' };
+    }
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    if (!caller || typeof url !== 'string') return { ok: false, reason: 'Unknown sender.' };
+    // The popup's own page may not ask for another page's recap.
+    const check = await checkRecap(url, caller);
+    if (check.noteCount + check.summaryCount === 0) return { ok: false, reason: 'Nothing is saved on this page.' };
+
+    const { windowId } = sender.tab;
+    // Before any await, like annotations:focus: opening the panel is only
+    // allowed while the click's user gesture is still live.
+    const opened = chrome.sidePanel.open({ windowId }).then(() => true, () => false);
+    const at = Date.now();
+    // A panel that is only now opening misses the messages below; it reads this.
+    await chrome.storage.session.set({ [RECAP_REQUEST_KEY]: { url, windowId, at } }).catch(() => {});
+    await opened;
+    await notify('sidepanel', 'recap:show', { url, windowId, at });
+    return { ok: true };
+  },
+
+  'recap:get': extensionPagesOnly('recap:get', async (payload, sender) => {
+    const caller = callerOf(sender, EXTENSION_ORIGIN);
+    return caller ? getRecap(payload, caller) : { ok: false, reason: 'Unknown sender.' };
+  }),
 
   /**
    * Content scripts report selections here rather than straight to the side

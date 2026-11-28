@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
-TABS = json.loads((Path(__file__).parent.parent / "samples" / "tabs.json").read_text())
+TABS = json.loads((Path(__file__).parent.parent / "samples" / "tabs.json").read_text(encoding="utf-8"))
 TARGET_FIRST_TOKEN_S = 3.0
 
 QUESTIONS = [

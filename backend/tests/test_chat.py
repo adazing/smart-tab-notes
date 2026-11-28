@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.main import app
 
 client = TestClient(app)
-SAMPLES = json.loads((Path(__file__).parent.parent / "samples" / "tabs.json").read_text())
+SAMPLES = json.loads((Path(__file__).parent.parent / "samples" / "tabs.json").read_text(encoding="utf-8"))
 
 
 def fake_embed(texts, usage):

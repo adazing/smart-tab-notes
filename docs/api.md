@@ -193,9 +193,80 @@ Scores how relevant each open tab is to a question, so the side panel can sugges
 
 **Errors**: 422 invalid body or over a size limit, 503 no OpenAI key, 502 the embedding call failed.
 
+## POST /recap
+
+Reminds a reader what they learned on a page they are opening again, from the notes they saved there and the summaries of chats they had about it. Called by the extension's service worker when the side panel asks for a recap; the worker caches the answer until the page's notes change.
+
+**Request**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `title` | string | no | The page's title, up to 1,000 characters. |
+| `url` | string | no | The page's URL, up to 4,096 characters. |
+| `notes` | array of Note | no | The notes saved on the page, oldest first, at most 200. |
+| `chat_summaries` | array of string | no | Summaries of chats about the page, oldest first, at most 50, each up to 10,000 characters. Blank ones are dropped. |
+
+At least one note or chat summary is required: with nothing saved there is nothing to recap.
+
+**Note**
+
+| Field | Type | Notes |
+|---|---|---|
+| `text` | string | The highlighted passage. 1 to 20,000 characters. |
+| `note` | string | What the reader wrote about it, up to 10,000 characters. |
+| `question` | string | What they asked about it (the toolbar's **Ask**), up to 2,000 characters. |
+| `explanation` | string | The answer or explanation they saved, up to 10,000 characters. |
+
+```json
+{
+  "title": "Attention is all you need",
+  "url": "https://example.com/attention",
+  "notes": [
+    { "text": "Transformers replaced recurrent networks entirely", "note": "the bit I keep forgetting" },
+    { "text": "scales quadratically with sequence length", "question": "Why is that a problem?", "explanation": "Twice the words means four times the work." }
+  ],
+  "chat_summaries": ["You compared attention with convolutions."]
+}
+```
+
+**Response 200**
+
+| Field | Type | Notes |
+|---|---|---|
+| `recap` | string | A paragraph of 2 to 4 sentences, addressed to the reader as "you": what the page covered and what they took from it. Can be `""` if the model answered with bullets only. |
+| `points` | string[] | Up to 5 short points, one per thing they marked, in the order given. Can be empty. |
+
+```json
+{
+  "recap": "You read about attention here. You marked two passages and asked why long documents cost so much.",
+  "points": [
+    "Transformers took over from recurrent networks, the bit you keep forgetting.",
+    "Attention scales quadratically, so twice the words means four times the work."
+  ]
+}
+```
+
+The model is given only what is in the request, and is asked not to add facts of its own. Notes fill a token budget (`RECAP_NOTES_TOKEN_BUDGET`, default 3000, at most `RECAP_PER_NOTE_TOKEN_BUDGET`, default 300, per note) oldest first, and the chat summaries fill another (`RECAP_SUMMARIES_TOKEN_BUDGET`, default 1000), so a page with hundreds of notes is recapped from as many as fit.
+
+**Errors**
+
+| Status | When | Body |
+|---|---|---|
+| 422 | Invalid body: no notes and no chat summaries, an empty `text`, or any field over its size limit | FastAPI validation error |
+| 503 | Backend has no OpenAI key configured | `{ "detail": "OPENAI_API_KEY is not set. Add it to backend/.env." }` |
+| 502 | The LLM call or anything else on the server failed | `{ "detail": "The recap service failed. Try again." }` |
+
+**Example**
+
+```bash
+curl -s http://localhost:8000/recap \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Attention","notes":[{"text":"Transformers replaced recurrent networks","note":"the bit I keep forgetting"}]}'
+```
+
 ## Token logging
 
-Every `/explain`, `/chat` and `/rank-tabs` request logs the tokens it used to the server console. The format looks like this (illustrative numbers, not a measurement):
+Every `/explain`, `/chat`, `/rank-tabs` and `/recap` request logs the tokens it used to the server console. The format looks like this (illustrative numbers, not a measurement):
 
 ```text
 INFO:     /chat tokens: embedding_tokens=6812 prompt_tokens=3420 completion_tokens=96 total_tokens=10328 tabs=3 sources=8 retrieval=embeddings first_token_ms=1450 total_ms=3020

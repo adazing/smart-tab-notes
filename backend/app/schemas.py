@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # Size caps keep a buggy or hostile client from sending enormous prompts. Text
@@ -122,3 +122,44 @@ class TabScore(BaseModel):
 
 class RankTabsResponse(BaseModel):
     scores: list[TabScore]
+
+
+# ---------------------------------------------------------------------------
+# /recap
+# ---------------------------------------------------------------------------
+
+
+class RecapNote(BaseModel):
+    """One saved note: the highlight, plus whatever the reader added to it."""
+
+    text: str = Field(min_length=1, max_length=20_000)
+    note: str = Field(default="", max_length=10_000)
+    question: str = Field(default="", max_length=2_000)
+    explanation: str = Field(default="", max_length=10_000)
+
+
+class RecapRequest(BaseModel):
+    title: str = Field(default="", max_length=1_000)
+    url: str = Field(default="", max_length=4_096)
+    # Oldest first, the order the reader made them in.
+    notes: list[RecapNote] = Field(default_factory=list, max_length=200)
+    chat_summaries: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("chat_summaries")
+    @classmethod
+    def summaries_fit(cls, summaries: list[str]) -> list[str]:
+        kept = [s for s in summaries if s.strip()]
+        if any(len(s) > 10_000 for s in kept):
+            raise ValueError("each chat summary is at most 10,000 characters")
+        return kept
+
+    @model_validator(mode="after")
+    def has_something_to_recap(self) -> "RecapRequest":
+        if not self.notes and not self.chat_summaries:
+            raise ValueError("a recap needs at least one note or chat summary")
+        return self
+
+
+class RecapResponse(BaseModel):
+    recap: str
+    points: list[str]

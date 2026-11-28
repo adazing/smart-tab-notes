@@ -1,5 +1,6 @@
 """Edge cases found in the week 1 code review."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,23 @@ from app.main import app
 client = TestClient(app)
 filler = " ".join(f"Filler sentence number {i} keeps the page long." for i in range(1500))  # ~13k tokens
 
+
+def minimal_env(**extra: str) -> dict[str, str]:
+    """
+    A deliberately bare environment for a child process: nothing on PATH, so
+    the child cannot find anything by accident.
+
+    SystemRoot is the exception. On Windows, importing asyncio loads the
+    _overlapped extension, which starts Winsock, which needs SystemRoot to
+    find its providers; without it the child dies on import. Passing it does
+    not weaken the test: it says nothing about where the backend looks for
+    its .env.
+    """
+    env = {"PATH": "", **extra}
+    root = os.environ.get("SystemRoot")
+    if root:
+        env["SystemRoot"] = root
+    return env
 
 def test_finds_a_selection_that_spans_paragraphs():
     # selection.toString() keeps the paragraph break; the page text may not match it exactly.
@@ -118,7 +136,7 @@ def test_env_file_is_read_from_backend_whatever_the_working_directory(tmp_path):
     out = subprocess.run(
         [sys.executable, "-c", "from app.config import Settings; print(Settings().openai_model)"],
         cwd=tmp_path,
-        env={"PYTHONPATH": str(backend), "PATH": ""},
+        env=minimal_env(PYTHONPATH=str(backend)),
         capture_output=True,
         text=True,
         check=True,

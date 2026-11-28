@@ -43,6 +43,25 @@ To mock the model, patch `app.agents.explain.call_llm`.
 
 `POST /rank-tabs` scores tabs against a question with the same embeddings.
 
+## Recap agent
+
+`app/agents/recap.py` (`POST /recap`) reminds a reader what they learned on a
+page they are opening again, from the notes they saved there and the summaries
+of chats they had about it. Three nodes:
+
+1. **build_context**: renders each note as a few labelled lines (the
+   highlight, what they wrote, what they asked, the answer they saved) and
+   fills `RECAP_NOTES_TOKEN_BUDGET` (default 3000) with them, oldest first, at
+   most `RECAP_PER_NOTE_TOKEN_BUDGET` (default 300) per note; the chat
+   summaries fill `RECAP_SUMMARIES_TOKEN_BUDGET` (default 1000).
+2. **llm_node**: asks for a short paragraph addressed to the reader, then up
+   to five bullets, one per thing they marked, using only what it was given.
+3. **parse_node**: splits that into `recap` and `points`, so the extension
+   does not parse prose. It accepts the bullet shapes models drift into
+   (`-`, `*`, `1.`) and drops a sign-off after the bullets.
+
+To mock the model, patch `app.agents.recap.call_llm`.
+
 All OpenAI calls are in `app/llm.py` (`complete`, `stream_chat`, `embed_texts`); tests replace those with fakes. Every request logs its token usage.
 
 ### Live check with 3 sample pages
